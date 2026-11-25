@@ -1,0 +1,26 @@
+# PK95 File eigenständig (ohne PK95 Core), z. B. zum Testen. Start: docker compose up -d
+# Die API braucht dann PK95FILE_TOKEN (mindestens 32 Zeichen) als Bearer-Token. Einrichtung: POST /api/setup mit den
+# Beitrittsdaten von PK95 AD (POST /api/computers/odj), siehe docs/api.md.
+#
+# network_mode host: der Dateiserver bekommt eine eigene LAN-Adresse auf eth0 (NET_ADMIN) und bindet smbd nur daran.
+services:
+  file:
+    image: ghcr.io/philippkuhlmann/pk95-file:latest
+    container_name: pk95-file
+    restart: unless-stopped
+    network_mode: host
+    cap_add: [NET_ADMIN, NET_RAW]
+    environment:
+      PK95FILE_TOKEN: bitte-durch-einen-langen-zufaelligen-token-ersetzen
+      PK95FILE_DEFAULT_IP: ""   # optional: vorgeschlagene Serveradresse, z. B. 192.168.1.20
+      TZ: Europe/Berlin
+    volumes:
+      - file_samba:/var/lib/samba
+      - file_config:/etc/samba
+      - file_data:/var/lib/pk95file
+      - /srv/pk95/files:/srv/files
+
+volumes:
+  file_samba:
+  file_config:
+  file_data:

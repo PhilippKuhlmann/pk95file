@@ -247,7 +247,7 @@ else
 	info "net sam rights grant SeDiskOperatorPrivilege failed"
 fi
 if docker exec spike-client smbcacls "//$FILES_IP/spike" / -U "$WG\\Administrator%$ADMIN_PW" >"$TMP/cacls.out" 2>&1 \
-	&& grep -q 'Domain Admins:ALLOWED/OI|CI/FULL' "$TMP/cacls.out"; then
+	&& grep -qi 'domain admins:ALLOWED/OI|CI/FULL' "$TMP/cacls.out"; then
 	pass "Administrator (Domain Admins, no username map) reads the root ACL over SMB"
 else
 	fail "Administrator over SMB: $(tail -n 3 "$TMP/cacls.out" | tr '\n' ' ')"

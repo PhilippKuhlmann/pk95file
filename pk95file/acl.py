@@ -57,10 +57,19 @@ def share_root_sddl(domain_sid: str, permissions: list[dict]) -> str:
     return f"O:{ROOT_USER}G:{ROOT_GROUP}D:PAI" + "".join(aces)
 
 
+CREATOR_OWNER = "S-1-3-0"
+# This folder only: traverse + create folders + read attributes + synchronize. vfs_recycle moves a deleted file
+# into .recycle/<user>/… as that user, so whoever may delete ("change") must be able to create their folder.
+RECYCLE_ENTER = 0x001000A4
+
+
 def recycle_sddl(domain_sid: str, permissions: list[dict]) -> str:
-    """.recycle: Domain Admins, SYSTEM and the share's "full" principals only, protected (docs/design.md §9)."""
+    """.recycle (docs/design.md §9): Domain Admins, SYSTEM and "full" principals see everything; "change" principals
+    may only create their own folder, which CREATOR OWNER makes theirs alone. Protected, no inheritance from the root."""
     aces = [_ace(e["sid"], e["access"]) for e in fixed_entries(domain_sid)]
     aces += [_ace(p["sid"], "full") for p in permissions if p["access"] == "full"]
+    aces += [f"(A;;0x{RECYCLE_ENTER:08x};;;{p['sid']})" for p in permissions if p["access"] == "change"]
+    aces.append(f"(A;OICIIO;0x{ACCESS_MASK['full']:08x};;;{CREATOR_OWNER})")
     return f"O:{ROOT_USER}G:{ROOT_GROUP}D:PAI" + "".join(aces)
 
 
