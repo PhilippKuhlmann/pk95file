@@ -346,7 +346,7 @@ NTFS-style ACL of the share root, inherited by everything below. Share-level per
 
 ACLs are stored in `user.NTACL` (`acl_xattr:security_acl_name = user.NTACL`, like PK95 AD) and written in-process
 with `samba.ntacls.setntacl` (session from `samba.auth_util.system_session_unix()`, as `samba-tool ntacl set` does
-in 4.22; proven in the ODJ spike). With `acl_xattr:ignore system acls = yes` there is no POSIX ACL mirror (that would need a
+in 4.22; without `service`, because the smbd module only knows `[global]` – the `acl_xattr` options live there). With `acl_xattr:ignore system acls = yes` there is no POSIX ACL mirror (that would need a
 Unix ID for every group in an ACE); smbd checks only the NT ACL. Users with Full Control may set finer ACLs on
 subfolders in Explorer; Core manages only the root.
 
