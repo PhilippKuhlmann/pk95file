@@ -235,7 +235,7 @@ from samba.param import LoadParm
 from samba.ntacls import setntacl
 from samba.auth_util import system_session_unix
 lp = LoadParm(); lp.load('/etc/samba/smb.conf')
-setntacl(lp, '/srv/files/shares/spike', sys.argv[1], sys.argv[2], system_session_unix(), use_ntvfs=False, skip_invalid_chown=True)
+setntacl(lp, '/srv/files/shares/spike', sys.argv[1], sys.argv[2], system_session_unix(), use_ntvfs=False)
 " "$SDDL" "$DOM_SID" >"$TMP/setntacl.out" 2>&1; then
 	pass "root ACL set in-process (samba.ntacls.setntacl): $SDDL"
 else
