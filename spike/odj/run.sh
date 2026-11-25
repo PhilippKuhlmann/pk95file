@@ -2,15 +2,18 @@
 # ODJ spike for PK95 File (docs/design.md §4): does an offline domain join work between PK95 AD and a Samba member,
 # with the computer account created in-process on the DC (no admin password) and the blob from `composeodj`?
 #
-#   DC      pk95-ad:1.4.0, provisions ci.example.test on 172.30.0.10 (API on 127.0.0.1:18389)
+#   DC      pk95-ad:1.5.0, provisions ci.example.test on 172.30.0.10 (API on 127.0.0.1:18389)
 #   member  Debian trixie Samba member "files"; container IP .20, adds 172.30.0.53 itself (design option A)
 #   client  same image, kinit + smbclient as a domain user
 #
+# ODJ_SOURCE=endpoint (default): the blob comes from PK95 AD's POST /api/computers/odj (AD >= 1.5.0).
+# ODJ_SOURCE=script: account via create_account.py and composeodj by hand (works with AD 1.4.0).
 # Needs Docker (Linux, or macOS with Colima/OrbStack), curl, openssl, python3. KEEP=1 leaves the containers running.
 set -uo pipefail
 cd "$(dirname "$0")"
 
-AD_IMAGE=${AD_IMAGE:-ghcr.io/philippkuhlmann/pk95-ad:1.4.0}
+AD_IMAGE=${AD_IMAGE:-ghcr.io/philippkuhlmann/pk95-ad:1.5.0}
+ODJ_SOURCE=${ODJ_SOURCE:-endpoint}
 MEMBER_IMAGE=pk95file-spike-member
 NET=pk95spike
 DC_IP=172.30.0.10 MEMBER_IP=172.30.0.20 FILES_IP=172.30.0.53 CLIENT_IP=172.30.0.100
@@ -100,41 +103,67 @@ SAM=/var/lib/samba/private/sam.ldb
 docker exec spike-dc samba-tool user create alice "$USER_PW" -H "$SAM" >/dev/null || die "create user alice"
 docker exec spike-dc samba-tool group add SpikeGroup -H "$SAM" >/dev/null || die "create group"
 docker exec spike-dc samba-tool group addmembers SpikeGroup alice -H "$SAM" >/dev/null || die "add member"
+docker exec spike-dc samba-tool user create bob "$USER_PW" -H "$SAM" >/dev/null || die "create user bob (not in the group)"
 ALICE_SID=$(docker exec spike-dc samba-tool user show alice -H "$SAM" --attributes=objectSid | sed -n 's/^objectSid: //p')
 ALICE_RID=${ALICE_SID##*-}
 info "alice $ALICE_SID → expected Unix ID $((10000 + ALICE_RID)) (rid backend)"
 
-# --- 2. computer account in-process, as POST /api/computers/odj would create it ---------------------------------------
-DOM=$(docker exec -i -e MACHINE_PASSWORD="$MACHINE_PW" spike-dc python3 - files "$REALM" < create_account.py) \
-	|| die "create computer account in-process (sam.ldb as system)"
-pass "computer account FILES\$ created in-process: $(echo "$DOM" | json 'd["account_dn"]')"
-DOM_SID=$(echo "$DOM" | json 'd["domain_sid"]')
-DOM_GUID=$(echo "$DOM" | json 'd["domain_guid"]')
-FOREST=$(echo "$DOM" | json 'd["forest_name"]')
+DOM_SID=${ALICE_SID%-*}
+ODJ_REQ="{\"name\":\"files\",\"dns_hostname\":\"files.$REALM\",\"description\":\"PK95 File ODJ spike\""
 
-# --- 3. composeodj on the DC (no DC contact, machine password known) --------------------------------------------------
-COMPOSE=(net offlinejoin composeodj --realm="$REALM_UP" --workgroup="$WG" domain_sid="$DOM_SID" domain_guid="$DOM_GUID"
-	forest_name="$FOREST" -S "dc1.$REALM" -I "$DC_IP" -U 'FILES$')
-BLOB=$(docker exec -e PASSWD="$MACHINE_PW" spike-dc timeout 30 "${COMPOSE[@]}" printblob </dev/null 2>"$TMP/compose.err" | tail -n 1)
-if [ -n "$BLOB" ] && echo "$BLOB" | base64 -d >/dev/null 2>&1; then
-	pass "composeodj printblob with the password from \$PASSWD (not on the command line)"
-else
-	info "composeodj with \$PASSWD failed: $(tr '\n' ' ' <"$TMP/compose.err")"
-	BLOB=$(docker exec spike-dc timeout 30 "${COMPOSE[@]}" --password="$MACHINE_PW" printblob </dev/null 2>"$TMP/compose.err" | tail -n 1)
-	if [ -n "$BLOB" ] && echo "$BLOB" | base64 -d >/dev/null 2>&1; then
-		pass "composeodj printblob with --password"
-	else
-		die "composeodj: $(tr '\n' ' ' <"$TMP/compose.err")"
+if [ "$ODJ_SOURCE" = endpoint ]; then
+# --- 2+3. POST /api/computers/odj (PK95 AD >= 1.5.0): account in-process + composeodj on the DC -------------------
+	ODJ=$(curl -sS -D "$TMP/odj.headers" -o - -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+		-d "$ODJ_REQ,\"reset\":false}" "$API/api/computers/odj")
+	if ! echo "$ODJ" | json 'd["odj"]' >/dev/null 2>&1; then
+		die "POST /api/computers/odj: $ODJ"
 	fi
-fi
-info "blob: ${#BLOB} chars of base64"
-if docker exec spike-dc timeout 30 "${COMPOSE[@]}" --password="$MACHINE_PW" savefile=/tmp/files.odj </dev/null >/dev/null 2>&1 \
-	&& docker cp spike-dc:/tmp/files.odj "$TMP/files.odj" >/dev/null 2>&1; then
-	pass "composeodj savefile (UTF-16 file, Windows format) for the loadfile variant"
+	BLOB=$(echo "$ODJ" | json 'd["odj"]')
+	pass "POST /api/computers/odj: created=$(echo "$ODJ" | json 'd["created"]'), account $(echo "$ODJ" | json 'd["computer"]["name"]'), domain $(echo "$ODJ" | json 'd["domain"]["netbios_domain"] + " / " + d["domain"]["realm"] + ", DC " + d["domain"]["dc"]["hostname"] + " " + d["domain"]["dc"]["ip"]')"
+	if grep -qi '^cache-control: no-store' "$TMP/odj.headers"; then pass "odj answer has Cache-Control: no-store"
+	else fail "odj answer without Cache-Control: no-store"; fi
+	if echo "$BLOB" | base64 -d >/dev/null 2>&1; then pass "blob is valid base64 (${#BLOB} chars)"
+	else die "blob is not base64"; fi
+	if docker logs spike-dc 2>&1 | grep -qF "$BLOB"; then fail "the blob appears in the DC log"
+	else pass "the blob does not appear in the DC log"; fi
+	code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+		-d "$ODJ_REQ,\"reset\":false}" "$API/api/computers/odj")
+	if [ "$code" = 409 ]; then pass "second POST without reset → 409"
+	else fail "second POST without reset → $code (expected 409)"; fi
 else
-	info "composeodj savefile not available"
+	# --- 2. computer account in-process, as POST /api/computers/odj would create it ---------------------------------------
+	DOM=$(docker exec -i -e MACHINE_PASSWORD="$MACHINE_PW" spike-dc python3 - files "$REALM" < create_account.py) \
+		|| die "create computer account in-process (sam.ldb as system)"
+	pass "computer account FILES\$ created in-process: $(echo "$DOM" | json 'd["account_dn"]')"
+	DOM_SID=$(echo "$DOM" | json 'd["domain_sid"]')
+	DOM_GUID=$(echo "$DOM" | json 'd["domain_guid"]')
+	FOREST=$(echo "$DOM" | json 'd["forest_name"]')
+
+	# --- 3. composeodj on the DC (no DC contact, machine password known) --------------------------------------------------
+	COMPOSE=(net offlinejoin composeodj --realm="$REALM_UP" --workgroup="$WG" domain_sid="$DOM_SID" domain_guid="$DOM_GUID"
+		forest_name="$FOREST" -S "dc1.$REALM" -I "$DC_IP" -U 'FILES$')
+	BLOB=$(docker exec -e PASSWD="$MACHINE_PW" spike-dc timeout 30 "${COMPOSE[@]}" printblob </dev/null 2>"$TMP/compose.err" | tail -n 1)
+	if [ -n "$BLOB" ] && echo "$BLOB" | base64 -d >/dev/null 2>&1; then
+		pass "composeodj printblob with the password from \$PASSWD (not on the command line)"
+	else
+		info "composeodj with \$PASSWD failed: $(tr '\n' ' ' <"$TMP/compose.err")"
+		BLOB=$(docker exec spike-dc timeout 30 "${COMPOSE[@]}" --password="$MACHINE_PW" printblob </dev/null 2>"$TMP/compose.err" | tail -n 1)
+		if [ -n "$BLOB" ] && echo "$BLOB" | base64 -d >/dev/null 2>&1; then
+			pass "composeodj printblob with --password"
+		else
+			die "composeodj: $(tr '\n' ' ' <"$TMP/compose.err")"
+		fi
+	fi
+	info "blob: ${#BLOB} chars of base64"
+	if docker exec spike-dc timeout 30 "${COMPOSE[@]}" --password="$MACHINE_PW" savefile=/tmp/files.odj </dev/null >/dev/null 2>&1 \
+		&& docker cp spike-dc:/tmp/files.odj "$TMP/files.odj" >/dev/null 2>&1; then
+		pass "composeodj savefile (UTF-16 file, Windows format) for the loadfile variant"
+	else
+		info "composeodj savefile not available"
+	fi
+	docker exec spike-dc rm -f /tmp/files.odj
+
 fi
-docker exec spike-dc rm -f /tmp/files.odj
 
 # --- 4. member: own secondary IP (option A), config, requestodj ------------------------------------------------------
 docker run -d --name spike-files --hostname files --network "$NET" --ip "$MEMBER_IP" --cap-add NET_ADMIN \
@@ -196,6 +225,16 @@ else fail "smbd listens on: $listen"; fi
 # --- 7. client: NTLM and Kerberos as a domain user --------------------------------------------------------------------
 docker run -d --name spike-client --network "$NET" --ip "$CLIENT_IP" "${HOSTS[@]}" "$MEMBER_IMAGE" >/dev/null || die "start client"
 docker exec spike-client sh -c "printf '%s\n' '$KRB5_CONF' > /etc/krb5.conf"
+# Share root ACL as PK95 File will set it (docs/design.md §9): SpikeGroup change, Domain Admins + SYSTEM full.
+# Set over SMB as Administrator, which the member maps to root (username map).
+ROOT_ACL="OWNER:$WG\\Domain Admins,GROUP:$WG\\Domain Users,ACL:$WG\\Domain Admins:ALLOWED/OI|CI/FULL,ACL:NT AUTHORITY\\SYSTEM:ALLOWED/OI|CI/FULL,ACL:$WG\\SpikeGroup:ALLOWED/OI|CI/CHANGE"
+if docker exec spike-client smbcacls "//$FILES_IP/spike" / -U "$WG\\Administrator%$ADMIN_PW" --set "$ROOT_ACL" >"$TMP/cacls.out" 2>&1; then
+	pass "root ACL set over SMB as Administrator (mapped to root)"
+else
+	fail "smbcacls --set as Administrator: $(tail -n 3 "$TMP/cacls.out" | tr '\n' ' ')"
+fi
+if docker exec spike-files getfattr -n user.NTACL /srv/files/shares/spike >/dev/null 2>&1; then pass "share root NT ACL stored in user.NTACL"
+else fail "no user.NTACL on the share root"; fi
 if docker exec spike-client smbclient "//$FILES_IP/spike" -U "$WG\\alice%$USER_PW" -m SMB3 -c 'put /etc/hostname ntlm.txt; ls' >/dev/null 2>&1; then
 	pass "NTLM: alice writes to //$FILES_IP/spike"
 else
@@ -214,7 +253,42 @@ fi
 owner=$(docker exec spike-files stat -c %u /srv/files/shares/spike/ntlm.txt 2>/dev/null)
 if [ "$owner" = "$((10000 + ALICE_RID))" ]; then pass "file owner on disk = alice's rid Unix ID ($owner)"
 else fail "file owner on disk: '$owner'"; fi
-if docker exec spike-files getfattr -n user.NTACL /srv/files/shares/spike/ntlm.txt >/dev/null 2>&1; then pass "NT ACL stored in user.NTACL"
+if docker exec spike-files getfattr -n user.NTACL /srv/files/shares/spike/ntlm.txt >/dev/null 2>&1; then pass "inherited NT ACL stored in user.NTACL on the new file"
 else fail "no user.NTACL on the written file"; fi
+out=$(docker exec spike-client smbclient "//$FILES_IP/spike" -U "$WG\\bob%$USER_PW" -m SMB3 -c 'put /etc/hostname bob.txt' 2>&1)
+if echo "$out" | grep -q 'NT_STATUS_ACCESS_DENIED'; then pass "bob (not in SpikeGroup) cannot write: NT ACL enforced"
+else fail "bob write was not denied: $(echo "$out" | tail -n 2 | tr '\n' ' ')"; fi
+
+# --- 8. rejoin: reset the account, new blob, requestodj again (POST /api/join later) ------------------------------------
+if [ "$ODJ_SOURCE" = endpoint ]; then
+	ODJ=$(api POST /api/computers/odj "$ODJ_REQ,\"reset\":true}") || fail "POST /api/computers/odj with reset"
+	BLOB2=$(echo "$ODJ" | json 'd["odj"]' 2>/dev/null)
+	if [ -n "$BLOB2" ] && [ "$BLOB2" != "$BLOB" ]; then pass "reset: new blob, created=$(echo "$ODJ" | json 'd["created"]')"
+	else fail "reset did not return a new blob"; fi
+	sleep 2
+	if docker exec spike-files wbinfo -t >/dev/null 2>&1; then info "old trust still accepted right after the reset (cached)"
+	else pass "old trust fails after the reset (expected)"; fi
+	docker exec spike-files sh -c 'pkill -x smbd; pkill -x winbindd; sleep 1'
+	if printf '%s' "$BLOB2" | docker exec -i spike-files net offlinejoin requestodj -i >/dev/null; then
+		docker exec spike-files sh -c 'winbindd -D && smbd -D'
+		ok=""
+		for _ in $(seq 20); do docker exec spike-files wbinfo -t >/dev/null 2>&1 && ok=1 && break; sleep 2; done
+		if [ -n "$ok" ]; then pass "rejoin: requestodj with the new blob, wbinfo -t ok"
+		else fail "rejoin: wbinfo -t: $(docker exec spike-files wbinfo -t 2>&1 | tr '\n' ' ')"; fi
+		if docker exec spike-client smbclient "//files.$REALM/spike" --use-kerberos=required -m SMB3 -c ls >/dev/null 2>&1; then
+			pass "rejoin: Kerberos SMB works with the new machine password"
+		else
+			info "rejoin: Kerberos SMB failed with the old service ticket; retrying with a fresh one"
+			docker exec spike-client sh -c "kdestroy; echo '$USER_PW' | kinit alice@$REALM_UP >/dev/null"
+			if docker exec spike-client smbclient "//files.$REALM/spike" --use-kerberos=required -m SMB3 -c ls >/dev/null 2>&1; then
+				pass "rejoin: Kerberos SMB works after a new ticket"
+			else
+				fail "rejoin: Kerberos SMB: $(docker exec spike-client smbclient "//files.$REALM/spike" --use-kerberos=required -m SMB3 -c ls 2>&1 | tail -n 2 | tr '\n' ' ')"
+			fi
+		fi
+	else
+		fail "rejoin: requestodj with the new blob"
+	fi
+fi
 
 exit "$FAILED"

@@ -1,6 +1,6 @@
 name: ODJ spike
 
-# Offline domain join between PK95 AD (ghcr.io/philippkuhlmann/pk95-ad:1.4.0) and a Samba member – decides the
+# Offline domain join between PK95 AD (ghcr.io/philippkuhlmann/pk95-ad:1.5.0) and a Samba member – decides the
 # PK95 AD endpoint POST /api/computers/odj (docs/design.md §4). Not part of the image build.
 on:
   workflow_dispatch:
