@@ -18,8 +18,9 @@ What `run.sh` checks against `ghcr.io/philippkuhlmann/pk95-ad:1.5.0` (`AD_IMAGE`
 5. `requestodj`, then `wbinfo -t`, `wbinfo -P`, `net ads testjoin`.
 6. rid mapping (`10000 + RID`, Domain Users → 10513), NSS lookup.
 7. smbd listens on the secondary IP only.
-8. Share root ACL set over SMB as Administrator (mapped to root); NTLM and Kerberos SMB access as `alice` (in the
-   group); `bob` (not in the group) is denied; file owner on disk and inherited `user.NTACL`.
+8. Share root ACL set in-process with `samba.ntacls.setntacl` (as the app will); NTLM and Kerberos SMB access as
+   `alice` (in the group); `bob` (not in the group) is denied; file owner on disk and inherited `user.NTACL`.
+   Diagnostic only: Administrator over SMB (`username map` → root).
 9. Rejoin: `reset: true` returns a new blob, `requestodj` again, trust and Kerberos SMB work again.
 
 Result against 1.4.0 with `ODJ_SOURCE=script` (2026-11-25, run 45678819056): all join checks passed (requestodj,
@@ -31,3 +32,8 @@ Run: `bash spike/odj/run.sh` on a Docker host (Linux, or macOS with Colima/OrbSt
 inspection. Output ends with a PASS/FAIL/INFO list.
 
 Not covered here: DNS through PK95 DNS (hosts entries and a fixed KDC instead), the unprivileged LXC, Windows clients.
+
+Result against 1.5.0 with the real endpoint (run 45679133770): every join check passed, including `no-store`, the blob
+not in the DC log, `409` without reset, and the rejoin (`reset: true` → new blob → `requestodj` → trust and Kerberos
+SMB again). Failed: setting the root ACL over SMB as Administrator (`NT_STATUS_INVALID_TOKEN` with `username map` →
+root), so the ACL checks had nothing to test; now replaced by the in-process `setntacl`.

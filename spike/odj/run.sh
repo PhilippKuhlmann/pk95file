@@ -225,13 +225,29 @@ else fail "smbd listens on: $listen"; fi
 # --- 7. client: NTLM and Kerberos as a domain user --------------------------------------------------------------------
 docker run -d --name spike-client --network "$NET" --ip "$CLIENT_IP" "${HOSTS[@]}" "$MEMBER_IMAGE" >/dev/null || die "start client"
 docker exec spike-client sh -c "printf '%s\n' '$KRB5_CONF' > /etc/krb5.conf"
-# Share root ACL as PK95 File will set it (docs/design.md §9): SpikeGroup change, Domain Admins + SYSTEM full.
-# Set over SMB as Administrator, which the member maps to root (username map).
-ROOT_ACL="OWNER:$WG\\Domain Admins,GROUP:$WG\\Domain Users,ACL:$WG\\Domain Admins:ALLOWED/OI|CI/FULL,ACL:NT AUTHORITY\\SYSTEM:ALLOWED/OI|CI/FULL,ACL:$WG\\SpikeGroup:ALLOWED/OI|CI/CHANGE"
-if docker exec spike-client smbcacls "//$FILES_IP/spike" / -U "$WG\\Administrator%$ADMIN_PW" --set "$ROOT_ACL" >"$TMP/cacls.out" 2>&1; then
-	pass "root ACL set over SMB as Administrator (mapped to root)"
+docker exec spike-client sh -c "printf '[global]\\n    workgroup = $WG\\n    realm = $REALM_UP\\n' > /etc/samba/smb.conf"
+# Share root ACL as PK95 File will set it (docs/design.md §9): in-process with samba.ntacls on the member,
+# SpikeGroup change, Domain Admins + SYSTEM full.
+GROUP_SID=$(docker exec spike-files wbinfo -n "$WG\\SpikeGroup" | awk '{print $1}')
+SDDL="O:DAG:DUD:PAI(A;OICI;FA;;;DA)(A;OICI;FA;;;SY)(A;OICI;0x1301bf;;;$GROUP_SID)"
+if docker exec spike-files python3 -c "
+import sys
+from samba.param import LoadParm
+from samba.ntacls import setntacl
+from samba.auth import system_session_unix
+lp = LoadParm(); lp.load('/etc/samba/smb.conf')
+setntacl(lp, '/srv/files/shares/spike', sys.argv[1], sys.argv[2], system_session_unix(), use_ntvfs=False, service='spike')
+" "$SDDL" "$DOM_SID" >"$TMP/setntacl.out" 2>&1; then
+	pass "root ACL set in-process (samba.ntacls.setntacl): $SDDL"
 else
-	fail "smbcacls --set as Administrator: $(tail -n 3 "$TMP/cacls.out" | tr '\n' ' ')"
+	fail "setntacl: $(tail -n 3 "$TMP/setntacl.out" | tr '\n' ' ')"
+fi
+# Diagnostic only: Administrator over SMB, mapped to root by username map (the 1.5.0 run got NT_STATUS_INVALID_TOKEN).
+if docker exec spike-client smbcacls "//$FILES_IP/spike" / -U "$WG\\Administrator%$ADMIN_PW" >"$TMP/cacls.out" 2>&1; then
+	info "Administrator (username map → root) can read the ACL over SMB"
+else
+	info "Administrator over SMB: $(grep -v smb.conf "$TMP/cacls.out" | tail -n 2 | tr '\n' ' ')"
+	docker exec spike-files sh -c "grep -h -i -B2 -A4 'administrator\\|token\\|username map' /var/log/samba/log.172.30.0.100 /var/log/samba/log.* 2>/dev/null | tail -n 30" || true
 fi
 if docker exec spike-files getfattr -n user.NTACL /srv/files/shares/spike >/dev/null 2>&1; then pass "share root NT ACL stored in user.NTACL"
 else fail "no user.NTACL on the share root"; fi
