@@ -228,14 +228,14 @@ docker exec spike-client sh -c "printf '[global]\\n    workgroup = $WG\\n    rea
 # Share root ACL as PK95 File will set it (docs/design.md §9): in-process with samba.ntacls on the member,
 # SpikeGroup change, Domain Admins + SYSTEM full.
 GROUP_SID=$(docker exec spike-files wbinfo -n "$WG\\SpikeGroup" | awk '{print $1}')
-SDDL="O:DAG:DUD:PAI(A;OICI;FA;;;DA)(A;OICI;FA;;;SY)(A;OICI;0x1301bf;;;$GROUP_SID)"
+SDDL="O:SYG:DUD:PAI(A;OICI;FA;;;DA)(A;OICI;FA;;;SY)(A;OICI;0x1301bf;;;$GROUP_SID)"
 if docker exec spike-files python3 -c "
 import sys
 from samba.param import LoadParm
 from samba.ntacls import setntacl
 from samba.auth_util import system_session_unix
 lp = LoadParm(); lp.load('/etc/samba/smb.conf')
-setntacl(lp, '/srv/files/shares/spike', sys.argv[1], sys.argv[2], system_session_unix(), use_ntvfs=False)
+setntacl(lp, '/srv/files/shares/spike', sys.argv[1], sys.argv[2], system_session_unix(), use_ntvfs=False, skip_invalid_chown=True)
 " "$SDDL" "$DOM_SID" >"$TMP/setntacl.out" 2>&1; then
 	pass "root ACL set in-process (samba.ntacls.setntacl): $SDDL"
 else
