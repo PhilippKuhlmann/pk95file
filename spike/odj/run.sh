@@ -179,8 +179,7 @@ docker exec spike-files arping -U -q -c 2 -I eth0 "$FILES_IP" || info "gratuitou
 pass "secondary address $FILES_IP added to eth0 inside the container"
 
 docker cp member-smb.conf spike-files:/etc/samba/smb.conf >/dev/null
-docker exec spike-files sh -c "printf '%s\n' '!root = $WG\\Administrator' > /etc/samba/user.map
-	printf '%s\n' '$KRB5_CONF' > /etc/krb5.conf
+docker exec spike-files sh -c "printf '%s\n' '$KRB5_CONF' > /etc/krb5.conf
 	mkdir -p /srv/files/shares/spike && chmod 1777 /srv/files/shares/spike
 	testparm -s >/dev/null 2>&1" || die "member config (testparm)"
 
@@ -234,7 +233,7 @@ if docker exec spike-files python3 -c "
 import sys
 from samba.param import LoadParm
 from samba.ntacls import setntacl
-from samba.auth import system_session_unix
+from samba.auth_util import system_session_unix
 lp = LoadParm(); lp.load('/etc/samba/smb.conf')
 setntacl(lp, '/srv/files/shares/spike', sys.argv[1], sys.argv[2], system_session_unix(), use_ntvfs=False, service='spike')
 " "$SDDL" "$DOM_SID" >"$TMP/setntacl.out" 2>&1; then
@@ -242,12 +241,22 @@ setntacl(lp, '/srv/files/shares/spike', sys.argv[1], sys.argv[2], system_session
 else
 	fail "setntacl: $(tail -n 3 "$TMP/setntacl.out" | tr '\n' ' ')"
 fi
-# Diagnostic only: Administrator over SMB, mapped to root by username map (the 1.5.0 run got NT_STATUS_INVALID_TOKEN).
-if docker exec spike-client smbcacls "//$FILES_IP/spike" / -U "$WG\\Administrator%$ADMIN_PW" >"$TMP/cacls.out" 2>&1; then
-	info "Administrator (username map → root) can read the ACL over SMB"
+# Administrator without username map: a normal domain user (rid uid 10500) with Full Control through Domain Admins.
+if docker exec spike-files net sam rights grant "$WG\\Domain Admins" SeDiskOperatorPrivilege >/dev/null 2>&1; then
+	pass "SeDiskOperatorPrivilege granted to Domain Admins"
 else
-	info "Administrator over SMB: $(grep -v smb.conf "$TMP/cacls.out" | tail -n 2 | tr '\n' ' ')"
-	docker exec spike-files sh -c "grep -h -i -B2 -A4 'administrator\\|token\\|username map' /var/log/samba/log.172.30.0.100 /var/log/samba/log.* 2>/dev/null | tail -n 30" || true
+	info "net sam rights grant SeDiskOperatorPrivilege failed"
+fi
+if docker exec spike-client smbcacls "//$FILES_IP/spike" / -U "$WG\\Administrator%$ADMIN_PW" >"$TMP/cacls.out" 2>&1 \
+	&& grep -q 'Domain Admins:ALLOWED/OI|CI/FULL' "$TMP/cacls.out"; then
+	pass "Administrator (Domain Admins, no username map) reads the root ACL over SMB"
+else
+	fail "Administrator over SMB: $(tail -n 3 "$TMP/cacls.out" | tr '\n' ' ')"
+fi
+if docker exec spike-client smbclient "//$FILES_IP/spike" -U "$WG\\Administrator%$ADMIN_PW" -m SMB3 -c 'put /etc/hostname admin.txt' >/dev/null 2>&1; then
+	pass "Administrator writes through Domain Admins Full Control"
+else
+	fail "Administrator cannot write"
 fi
 if docker exec spike-files getfattr -n user.NTACL /srv/files/shares/spike >/dev/null 2>&1; then pass "share root NT ACL stored in user.NTACL"
 else fail "no user.NTACL on the share root"; fi

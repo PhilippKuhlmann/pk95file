@@ -165,7 +165,6 @@ idmap config * : backend = tdb
 idmap config * : range = 3000-7999
 idmap config EXAMPLE : backend = rid
 idmap config EXAMPLE : range = 10000-64999
-username map = /etc/samba/user.map       # "!root = EXAMPLE\Administrator"
 template shell = /bin/false
 template homedir = /nonexistent
 ```
@@ -193,8 +192,9 @@ Details:
 - `*` range 3000–7999 (the range in Samba's own member example): only BUILTIN and well-known SIDs (Everyone,
   Authenticated Users, SYSTEM, CREATOR OWNER, BUILTIN\Administrators …) land there, a few dozen IDs. It stays below
   the domain range and below 65536.
-- `Administrator` (RID 500) would get Unix ID 10500; `username map` maps it to root instead, as the Samba wiki
-  recommends, so domain admins working as Administrator can take ownership and fix ACLs.
+- No `username map` to root. `Administrator` (RID 500) is an ordinary domain user with Unix ID 10500; admins get their
+  rights from the ACL (Domain Admins Full Control on every share root) and `SeDiskOperatorPrivilege`. Mapping
+  Administrator to root was tried in the ODJ spike and refused by smbd with `NT_STATUS_INVALID_TOKEN`.
 - With `acl_xattr:ignore system acls = yes` (section 9) the Unix IDs are only used for the process identity and file
   ownership, never for permission checks; those use the NT ACL with SIDs.
 
@@ -345,7 +345,8 @@ NTFS-style ACL of the share root, inherited by everything below. Share-level per
 | always | `Domain Admins` Full, `SYSTEM` Full (cannot be removed; shown read-only) |
 
 ACLs are stored in `user.NTACL` (`acl_xattr:security_acl_name = user.NTACL`, like PK95 AD) and written in-process
-with `samba.ntacls.setntacl`. With `acl_xattr:ignore system acls = yes` there is no POSIX ACL mirror (that would need a
+with `samba.ntacls.setntacl` (session from `samba.auth_util.system_session_unix()`, as `samba-tool ntacl set` does
+in 4.22; proven in the ODJ spike). With `acl_xattr:ignore system acls = yes` there is no POSIX ACL mirror (that would need a
 Unix ID for every group in an ACE); smbd checks only the NT ACL. Users with Full Control may set finer ACLs on
 subfolders in Explorer; Core manages only the root.
 
@@ -353,7 +354,7 @@ Changing the root ACL does not touch existing files and folders by itself. `PUT 
 `"propagate": true` starts a job that recomputes the inherited ACEs of everything below (explicit ACEs on subfolders
 are kept). That is a full tree walk, shown as a job with progress.
 
-Optional: Domain Admins get `SeDiskOperatorPrivilege` (`net sam rights grant`), so admins can also manage share ACLs
+Setup grants Domain Admins `SeDiskOperatorPrivilege` (`net sam rights grant`), so admins can also manage share ACLs
 from Windows (Computer Management).
 
 ### smb.conf (generated on every start and every change)

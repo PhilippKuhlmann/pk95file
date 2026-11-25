@@ -176,8 +176,8 @@ touched).
 | `allow_system_disk` | must be `true` if `storage.on_system_disk` (otherwise `422` on `allow_system_disk`) |
 
 Steps (each appears in `log`): preflight, IP check, add the IP to the interface (`managed` only), write `smb.conf`/`krb5.conf`/
-`user.map`/`resolv.conf`, `net offlinejoin requestodj`, start winbindd, `wbinfo -t`, `wbinfo -P`, resolve
-`Domain Users` to a Unix ID (rid: 10513), read the RID high-water mark, create `shares/` and `.pk95/`, start smbd, check 445 on the IP, send `file.setup.done`.
+`resolv.conf`, `net offlinejoin requestodj`, start winbindd, `wbinfo -t`, `wbinfo -P`, resolve
+`Domain Users` to a Unix ID (rid: 10513), read the RID high-water mark, grant Domain Admins `SeDiskOperatorPrivilege`, create `shares/` and `.pk95/`, start smbd, check 445 on the IP, send `file.setup.done`.
 
 ### `POST /api/join`
 
