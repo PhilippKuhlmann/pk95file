@@ -65,6 +65,8 @@ def api(base: str, token: str, method: str, path: str, body=None, timeout: float
             return exc.code, json.loads(raw) if raw else None
         except ValueError:
             return exc.code, raw.decode(errors="replace")
+    except (urllib.error.URLError, OSError) as exc:  # not listening yet, connection reset while starting
+        return 0, {"error": str(exc)}
 
 
 def ad(method, path, body=None, timeout=60):
@@ -142,8 +144,8 @@ def main() -> int:
     wait(lambda: ad("GET", "/core/health")[0] == 200, 120)
     st, _ = ad("POST", "/api/setup", {"realm": REALM, "netbios_domain": WG, "hostname": "dc1", "host_ip": DC_IP,
                                       "dns_forwarder": "127.0.0.1", "admin_password": ADMIN_PW})
-    state = wait(lambda: ad("GET", "/api/setup")[1]["state"] in ("ready", "failed")
-                 and ad("GET", "/api/setup")[1]["state"], 300, 3)
+    state = wait(lambda: (lambda b: isinstance(b, dict) and b.get("state") in ("ready", "failed") and b["state"])(
+        ad("GET", "/api/setup")[1]), 300, 3)
     if not check(st == 202 and state == "ready", f"DC provisioned ({AD_IMAGE})", str(state)):
         return 1
     sam = "/var/lib/samba/private/sam.ldb"
@@ -199,12 +201,12 @@ def main() -> int:
     check(st == 422 and "odj" in body["fields"], "setup with foreign ODJ data → 422 odj", json.dumps(body))
     st, _ = fs("POST", "/api/setup", {**setup, "odj": odj["odj"]})
     check(st == 202, "POST /api/setup → 202")
-    state = wait(lambda: (lambda s: s["state"] in ("ready", "failed") and s)(fs("GET", "/api/setup")[1]), 240, 3)
+    state = wait(lambda: (lambda s: isinstance(s, dict) and s.get("state") in ("ready", "failed") and s)(fs("GET", "/api/setup")[1]), 240, 3)
     if not check(state and state["state"] == "ready", "setup ready", json.dumps(state)[-1500:] if state else ""):
         return 1
     check(state["server"]["fqdn"] == f"files.{REALM}", "setup: server block")
     check(wait(lambda: any(e["type"] == "file.setup.done" for e in EVENTS), 30), "event file.setup.done")
-    status = wait(lambda: (lambda s: s["trust"]["checked_at"] and s)(fs("GET", "/api/status")[1]), 90, 3)
+    status = wait(lambda: (lambda s: isinstance(s, dict) and s.get("trust", {}).get("checked_at") and s)(fs("GET", "/api/status")[1]), 90, 3)
     check(status and status["smbd"]["state"] == "running" and status["winbindd"]["state"] == "running",
           "status: smbd and winbindd running", json.dumps(status and status["smbd"]))
     check(status and status["trust"]["ok"] and status["ip"]["present"], "status: trust ok, address present")
@@ -310,7 +312,7 @@ def main() -> int:
     # --- rejoin and backup ------------------------------------------------------------------------------------------
     st, odj2 = ad("POST", "/api/computers/odj", {"name": "files", "dns_hostname": f"files.{REALM}", "reset": True})
     st, _ = fs("POST", "/api/join", {"odj": odj2["odj"]})
-    state = wait(lambda: (lambda s: s["state"] in ("ready", "failed") and s)(fs("GET", "/api/setup")[1]), 180, 3)
+    state = wait(lambda: (lambda s: isinstance(s, dict) and s.get("state") in ("ready", "failed") and s)(fs("GET", "/api/setup")[1]), 180, 3)
     check(st == 202 and state and state["state"] == "ready", "rejoin with a new blob", json.dumps(state)[-500:] if state else "")
     check(dexec("ci-file", "wbinfo", "-t").returncode == 0, "trust after rejoin")
     dexec("ci-client", "sh", "-c", f"kdestroy; echo '{USER_PW}' | kinit alice@{REALM_UP}")
