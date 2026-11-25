@@ -1,7 +1,25 @@
 # PK95 File – HTTP API
 
-Status: **agreed with the master session on 2026-11-25**, except the PK95 AD endpoint for ODJ, which depends on
-the CI spike. Design and decisions: `docs/design.md`.
+Status: **contract for the PK95 Core module** (agreed with the master session on 2026-11-25). The ODJ spike passed
+against PK95 AD 1.5.0, which ships `POST /api/computers/odj` and `sid` in the group list. Design and decisions:
+`docs/design.md`.
+
+### Frozen parts (v1.0)
+
+Core builds against these now. Within them only **additive** changes are allowed (new optional response fields, new
+optional request fields with a default, new `warnings[].code` values, new events). Anything else – renaming, removing,
+changing a type, a status code or a validation rule – needs the master session's agreement, and every change to this
+file is reported to it with the diff.
+
+| Part | Sections |
+|---|---|
+| Setup | `GET /api/setup` (incl. `defaults` and the `storage` preflight result), `GET /api/setup/ip-check`, `POST /api/setup`, `POST /api/join` |
+| Status and Core figures | `GET /api/status`, `GET /api/dashboard` |
+| Shares | share object, `GET`/`POST`/`PUT`/`DELETE /api/shares…`, `PUT /api/shares/{name}/permissions`, field rules |
+| Events | the manifest's `events` list and the events table |
+
+Not frozen yet (may still change before v1.0): snapshots, recycle bin, sessions and open files, usage, jobs, settings,
+orphans.
 
 PK95 File runs a Samba domain member file server in the PK95 AD domain and exposes one JSON admin API for the
 PK95 Core module `file` (app protocol v1, see `PK95Core/docs/app-protocol.md`). There is no own web UI.
