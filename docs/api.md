@@ -105,6 +105,7 @@ States: `unconfigured` | `joining` | `ready` | `failed`.
   "defaults": {
     "hostname": "files",
     "ip": "192.168.1.20",
+    "ip_source": "probe",
     "interface": "eth0",
     "subnet": "192.168.1.0/24",
     "host_ips": ["192.168.1.10"]
@@ -125,7 +126,10 @@ States: `unconfigured` | `joining` | `ready` | `failed`.
 }
 ```
 
-- `defaults.ip`: the suggested server address from `PK95FILE_DEFAULT_IP` (catalog), empty without it.
+- `defaults.ip`: the suggested server address. `PK95FILE_DEFAULT_IP` if set (the operator's value from Core's `.env`);
+  otherwise the app tries the next up to 10 addresses after the LXC's own `eth0` address (skipping `host_ips`, network and
+  broadcast) and suggests the first that passes `arping -D`. Empty if none is free. `defaults.ip_source`: `env` |
+  `probe` | `""`.
 - `defaults.interface`/`subnet`: interface and subnet of the default route; the server IP must lie in that subnet.
   `host_ips`: addresses the LXC already has. For `ip_mode: managed` the wizard does not offer them; for
   `ip_mode: existing` it offers only them (minus the DC's address).
@@ -551,12 +555,17 @@ env:
   PK95FILE_LISTEN: 0.0.0.0:8445
   PK95FILE_DATA_DIR: /var/lib/pk95file
   PK95FILE_DATA_ROOT: /srv/files
-  PK95FILE_DEFAULT_IP: 192.168.1.20   # server IP the setup wizard suggests (set to the actual LAN in Core's catalog)
+  # PK95FILE_DEFAULT_IP comes from Core's .env when the operator sets it (no LAN address in any repository)
 ```
 
 - Module `file`: a setup wizard on the `server` page that requires PK95 AD in state `ready`, runs the flow in
   `docs/design.md` §4 (domain data → ODJ blob → A record → `POST /api/setup`) and never stores the blob; the shares
   page with a group picker fed from PK95 AD; a "Laufwerk zuordnen" shortcut that pre-fills a PK95 AD drive map with
   the share's `unc`.
-- `docs/lxc-setup.md`: mount point `mp0` at `/srv/pk95/files` with `backup=1`, server IP outside the DHCP pool,
-  Proxmox IP filter note.
+- Server IP at runtime only (PK95 Core is public too, so neither its catalog nor lxc-setup.md contains a real address):
+  - the wizard shows `GET file:/api/setup` → `defaults.ip` (operator value or the app's DAD-checked suggestion next to
+    the LXC address), the user confirms or changes it, `GET /api/setup/ip-check` validates it before `POST /api/setup`;
+  - optional operator default: `PK95FILE_DEFAULT_IP` in Core's `.env`, passed into the container's environment
+    (e.g. as a Core setting referenced by the catalog, `"{setting:file_default_ip|}"`; empty = not set).
+- `docs/lxc-setup.md`: mount point `mp0` at `/srv/pk95/files` with `backup=1`, a server IP outside the DHCP pool,
+  the Proxmox IP filter note – all with example values (192.168.1.x).

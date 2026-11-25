@@ -64,9 +64,12 @@ named the same way as `pk95ad` → `ad` → `pk95-ad`.
 
 ### Option A in detail
 
-- Setup parameter `ip` (IPv4 in the LXC's subnet). Default from the catalog (`PK95FILE_DEFAULT_IP`,
-  the address the operator chose for this LXC), so the image itself carries no LAN address. The prefix and interface are taken from `eth0` (the interface of the route to the DC),
-  not entered.
+- Setup parameter `ip` (IPv4 in the LXC's subnet). The real address only ever comes in at runtime – no repository
+  (this one, PK95 Core, PK95 AD; all public) contains it:
+  - the user enters it in Core's setup wizard, which pre-fills `GET /api/setup` → `defaults.ip`;
+  - `defaults.ip` is `PK95FILE_DEFAULT_IP` if the operator set it (in Core's `.env`, handed to the container), otherwise
+    the app's own suggestion: the next addresses after the LXC's `eth0` address, the first one that passes the DAD check.
+  The prefix and interface are taken from `eth0` (the interface of the route to the DC), not entered.
 - Two modes (`ip_mode`):
   - `managed` (default): before first use the app checks the address with `arping -D` (duplicate address
     detection) and refuses a taken one („Die Adresse 192.168.1.20 ist im Netz bereits vergeben.“). On every start it
@@ -426,8 +429,8 @@ from Windows (Computer Management).
    `cap_add: [NET_ADMIN, NET_RAW]`. The IP is a setup parameter (prefix from `eth0`) with a DAD check before use;
    `ip_mode: existing` for an address the operator configured in Proxmox (`net1`), which the app never adds or
    removes. Integration test: the DC's DNS records are unchanged after the second address appears.
-   **Decided (user):** a fixed address outside the DHCP pool, default in Core's catalog (`PK95FILE_DEFAULT_IP`) and in
-   Core's lxc-setup.md; examples here use 192.168.1.20.
+   **Decided (user):** a fixed address outside the DHCP pool, entered at runtime (Core wizard, or `PK95FILE_DEFAULT_IP`
+   in Core's `.env`); no repository contains it. Examples everywhere use 192.168.1.20.
 2. **Join: accepted.** ODJ (`composeodj` on the AD side, `requestodj` on the member), `join_user`/`join_password` as a
    one-time fallback. CI spike first against `ghcr.io/philippkuhlmann/pk95-ad:1.4.0`; its result decides the AD endpoint.
 3. **idmap: changed to `rid`.** `EXAMPLE` rid 10000–64999 (RIDs up to 54999), `*` tdb 3000–7999. No change on
