@@ -1,7 +1,25 @@
 # PK95 File – HTTP API
 
-Status: **agreed with the master session on 2026-11-25**, except the PK95 AD endpoint for ODJ, which depends on
-the CI spike. Design and decisions: `docs/design.md`.
+Status: **contract for the PK95 Core module** (agreed with the master session on 2026-11-25). The ODJ spike passed
+against PK95 AD 1.5.0, which ships `POST /api/computers/odj` and `sid` in the group list. Design and decisions:
+`docs/design.md`.
+
+### Frozen parts (v1.0)
+
+Core builds against these now. Within them only **additive** changes are allowed (new optional response fields, new
+optional request fields with a default, new `warnings[].code` values, new events). Anything else – renaming, removing,
+changing a type, a status code or a validation rule – needs the master session's agreement, and every change to this
+file is reported to it with the diff.
+
+| Part | Sections |
+|---|---|
+| Setup | `GET /api/setup` (incl. `defaults` and the `storage` preflight result), `GET /api/setup/ip-check`, `POST /api/setup`, `POST /api/join` |
+| Status and Core figures | `GET /api/status`, `GET /api/dashboard` |
+| Shares | share object, `GET`/`POST`/`PUT`/`DELETE /api/shares…`, `PUT /api/shares/{name}/permissions`, field rules |
+| Events | the manifest's `events` list and the events table |
+
+Not frozen yet (may still change before v1.0): snapshots, recycle bin, sessions and open files, usage, jobs, settings,
+orphans.
 
 PK95 File runs a Samba domain member file server in the PK95 AD domain and exposes one JSON admin API for the
 PK95 Core module `file` (app protocol v1, see `PK95Core/docs/app-protocol.md`). There is no own web UI.
@@ -105,6 +123,7 @@ States: `unconfigured` | `joining` | `ready` | `failed`.
   "defaults": {
     "hostname": "files",
     "ip": "192.168.1.20",
+    "ip_source": "probe",
     "interface": "eth0",
     "subnet": "192.168.1.0/24",
     "host_ips": ["192.168.1.10"]
@@ -125,7 +144,10 @@ States: `unconfigured` | `joining` | `ready` | `failed`.
 }
 ```
 
-- `defaults.ip`: the suggested server address from `PK95FILE_DEFAULT_IP` (catalog), empty without it.
+- `defaults.ip`: the suggested server address. `PK95FILE_DEFAULT_IP` if set (the operator's value from Core's `.env`);
+  otherwise the app tries the next up to 10 addresses after the LXC's own `eth0` address (skipping `host_ips`, network and
+  broadcast) and suggests the first that passes `arping -D`. Empty if none is free. `defaults.ip_source`: `env` |
+  `probe` | `""`.
 - `defaults.interface`/`subnet`: interface and subnet of the default route; the server IP must lie in that subnet.
   `host_ips`: addresses the LXC already has. For `ip_mode: managed` the wizard does not offer them; for
   `ip_mode: existing` it offers only them (minus the DC's address).
@@ -172,8 +194,8 @@ touched).
 | `allow_system_disk` | must be `true` if `storage.on_system_disk` (otherwise `422` on `allow_system_disk`) |
 
 Steps (each appears in `log`): preflight, IP check, add the IP to the interface (`managed` only), write `smb.conf`/`krb5.conf`/
-`user.map`/`resolv.conf`, `net offlinejoin requestodj`, start winbindd, `wbinfo -t`, `wbinfo -P`, resolve
-`Domain Users` to a Unix ID (rid: 10513), read the RID high-water mark, create `shares/` and `.pk95/`, start smbd, check 445 on the IP, send `file.setup.done`.
+`resolv.conf`, `net offlinejoin requestodj`, start winbindd, `wbinfo -t`, `wbinfo -P`, resolve
+`Domain Users` to a Unix ID (rid: 10513), read the RID high-water mark, grant Domain Admins `SeDiskOperatorPrivilege`, create `shares/` and `.pk95/`, start smbd, check 445 on the IP, send `file.setup.done`.
 
 ### `POST /api/join`
 
@@ -551,12 +573,17 @@ env:
   PK95FILE_LISTEN: 0.0.0.0:8445
   PK95FILE_DATA_DIR: /var/lib/pk95file
   PK95FILE_DATA_ROOT: /srv/files
-  PK95FILE_DEFAULT_IP: 192.168.1.20   # server IP the setup wizard suggests (set to the actual LAN in Core's catalog)
+  # PK95FILE_DEFAULT_IP comes from Core's .env when the operator sets it (no LAN address in any repository)
 ```
 
 - Module `file`: a setup wizard on the `server` page that requires PK95 AD in state `ready`, runs the flow in
   `docs/design.md` §4 (domain data → ODJ blob → A record → `POST /api/setup`) and never stores the blob; the shares
   page with a group picker fed from PK95 AD; a "Laufwerk zuordnen" shortcut that pre-fills a PK95 AD drive map with
   the share's `unc`.
-- `docs/lxc-setup.md`: mount point `mp0` at `/srv/pk95/files` with `backup=1`, server IP outside the DHCP pool,
-  Proxmox IP filter note.
+- Server IP at runtime only (PK95 Core is public too, so neither its catalog nor lxc-setup.md contains a real address):
+  - the wizard shows `GET file:/api/setup` → `defaults.ip` (operator value or the app's DAD-checked suggestion next to
+    the LXC address), the user confirms or changes it, `GET /api/setup/ip-check` validates it before `POST /api/setup`;
+  - optional operator default: `PK95FILE_DEFAULT_IP` in Core's `.env`, passed into the container's environment
+    (e.g. as a Core setting referenced by the catalog, `"{setting:file_default_ip|}"`; empty = not set).
+- `docs/lxc-setup.md`: mount point `mp0` at `/srv/pk95/files` with `backup=1`, a server IP outside the DHCP pool,
+  the Proxmox IP filter note – all with example values (192.168.1.x).

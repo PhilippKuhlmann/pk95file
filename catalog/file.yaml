@@ -1,7 +1,7 @@
 # PK95 File (repo pk95file): Samba member file server in the PK95 AD domain, managed by the PK95 Core module
 # "file". Image built by this repo's GitHub Actions; needs the Core mode of app protocol v1 and PK95 AD.
 #
-# Host network with its own LAN address: the app adds PK95FILE_DEFAULT_IP (or the address chosen in setup) to eth0
+# Host network with its own LAN address: the app adds the address chosen in setup to eth0
 # (NET_ADMIN, NET_RAW for arping) and binds smbd to it only; the DC keeps 445 on the LXC's main address.
 # Data on a Proxmox mount point at /srv/pk95/files (not in Core's volume backup; Proxmox backs it up).
 id: file
@@ -30,4 +30,4 @@ env:
   PK95FILE_LISTEN: 0.0.0.0:8445
   PK95FILE_DATA_DIR: /var/lib/pk95file
   PK95FILE_DATA_ROOT: /srv/files
-  # PK95FILE_DEFAULT_IP: 192.168.1.20  # server IP the setup wizard suggests; set in Core's catalog for the actual LAN
+  # PK95FILE_DEFAULT_IP: optional suggestion for the setup wizard, from the operator's .env – never a real address here
