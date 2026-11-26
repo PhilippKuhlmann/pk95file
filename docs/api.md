@@ -386,7 +386,8 @@ Snapshot object:
 | `POST /api/shares/{name}/recycle/restore` | `{"paths": ["max.muster/Ordner/Datei.docx"]}` | `202` job; restores to the original place, with the suffix ` (Wiederhergestellt)` if the name is taken again |
 | `POST /api/shares/{name}/recycle/empty` | `{"older_than_days": 0}` | `202` job |
 
-`deleted_at` is the mtime set by `recycle:touch_mtime`. The daily retention run (in Core's maintenance window, 03:30
+`deleted_at` is the mtime set by `recycle:touch_mtime`. macOS helper files (`._*`, `.DS_Store`) never go to the
+recycle bin (since 1.1.0, regardless of the `macos` setting and in addition to `recycle.exclude`). The daily retention run (in Core's maintenance window, 03:30
 local time) deletes entries older than `recycle.keep_days`.
 
 ## Sessions and open files
@@ -474,7 +475,8 @@ another; snapshots run one share at a time.
   "disk_critical_percent": 10,
   "snapshot_min_free_percent": 15,
   "smb_encryption": "if_required",
-  "min_protocol": "SMB2_10"
+  "min_protocol": "SMB2_10",
+  "macos": false
 }
 ```
 
@@ -485,8 +487,13 @@ another; snapshots run one share at a time.
 | `snapshot_min_free_percent` | 5–50 |
 | `smb_encryption` | `if_required` \| `desired` \| `required` (`server smb encrypt`) |
 | `min_protocol` | `SMB2_10` \| `SMB3_00` \| `SMB3_11` |
+| `macos` | `true` \| `false` (new in 1.1.0, default `false`): macOS support for all shares (`vfs_fruit` + `streams_xattr`, docs/design.md §9a) |
 
 Changing a setting rewrites `smb.conf` and reloads smbd (`smbcontrol smbd reload-config`); sessions stay.
+
+The `PUT` answer additionally carries `notice` (new in 1.1.0): a German text for Core to show, empty unless `macos` was
+changed: „Die macOS-Unterstützung gilt für neue Verbindungen. Bereits verbundene Macs behalten das bisherige Verhalten,
+bis sie die Freigabe trennen und neu verbinden.“ (vfs_fruit negotiates the Apple extension per connection.)
 
 ## Needed from PK95 AD (proposed contract)
 

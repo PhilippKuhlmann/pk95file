@@ -98,6 +98,13 @@ class HttpTest(unittest.TestCase):
         self.assertEqual(status, 422)
         status, body = self.call("PUT", "/api/settings", {"disk_warn_percent": 25})
         self.assertEqual((status, body["disk_warn_percent"]), (200, 25))
+        self.assertEqual(body["notice"], "")
+        self.assertEqual(self.call("PUT", "/api/settings", {"macos": "yes"})[0], 422)
+        status, body = self.call("PUT", "/api/settings", {"macos": True})
+        self.assertEqual((status, body["macos"]), (200, True))
+        self.assertIn("neu verbinden", body["notice"])
+        self.assertTrue(self.call("GET", "/api/settings")[1]["macos"])
+        self.call("PUT", "/api/settings", {"macos": False})
 
 
 if __name__ == "__main__":

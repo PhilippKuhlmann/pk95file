@@ -398,5 +398,23 @@ class SessionsTest(unittest.TestCase):
         self.assertEqual(parse_sessions({}), [])
 
 
+class MacosTest(unittest.TestCase):
+    def test_smbconf_macos(self):
+        share = {"name": "Buchhaltung", "enabled": True, "abe": True, "locked": False,
+                 "recycle": {"enabled": True, "exclude": ["*.tmp"]}, "snapshots": {"enabled": True}}
+        off = smbconf.render(SETTINGS, [share], "/srv/files/shares", "/srv/files/.pk95/snapshots")
+        self.assertNotIn("fruit", off)
+        self.assertIn("vfs objects = acl_xattr shadow_copy2 recycle", off)
+        self.assertIn("recycle:exclude = *.tmp|._*|.DS_Store", off)   # always, regardless of the setting
+        on = smbconf.render({**SETTINGS, "macos": True}, [share], "/srv/files/shares", "/srv/files/.pk95/snapshots")
+        self.assertIn("vfs objects = fruit streams_xattr acl_xattr shadow_copy2 recycle", on)
+        self.assertIn("    vfs objects = fruit streams_xattr acl_xattr\n", on)   # [global]
+        for opt in ("fruit:nfs_aces = no", "fruit:resource = file", "fruit:metadata = stream",
+                    "fruit:convert_adfile = yes"):
+            self.assertIn(opt, on)
+        share["recycle"]["exclude"] = []
+        self.assertIn("recycle:exclude = ._*|.DS_Store", smbconf.render(SETTINGS, [share], "/s", ""))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -425,6 +425,24 @@ from Windows (Computer Management).
   of deletion, so retention does not depend on atime). `max_file_mb` maps to `recycle:maxsize`.
 - Hidden shares: names ending with `$`.
 
+## 9a. macOS clients (1.1.0)
+
+One server setting `macos` (default off), not per share: `vfs_fruit` negotiates the Apple SMB extension (AAPL) at
+the first tree connect of a connection, so all shares must use the same chain. When on, every share runs
+`fruit streams_xattr acl_xattr [shadow_copy2] [recycle]` with
+
+- `fruit:metadata = stream` (Finder info and tags as a stream in a `user.DosStream.*` xattr),
+- `fruit:resource = file` – resource forks stay AppleDouble files (`._*`, hidden from Macs by `veto_appledouble`);
+  as streams they would be limited to the 64 KiB a Linux xattr can hold (ext4: one 4 KiB block) and fail silently,
+- `fruit:nfs_aces = no` – the default would write POSIX modes as NFS ACEs into the ACLs and fight the NT ACLs,
+- `posix_rename`, `wipe_intentionally_left_blank_rfork`, `delete_empty_adfiles`, `convert_adfile` (existing `._*`
+  files written by Macs before become streams on access).
+
+`streams_xattr` also keeps Windows alternate data streams (e.g. `Zone.Identifier`, the "Mark of the Web"), which were
+dropped before. Streams live as xattrs on the inode: rsync `-X` copies them into snapshots, the recycle bin moves the
+inode with them. `._*` and `.DS_Store` are always excluded from the recycle bin. Switching the setting rewrites
+smb.conf and reloads smbd; connected Macs keep their negotiated behaviour until they reconnect (the API says so).
+
 ## 10. Later: home drives and folder redirection (planned, not built)
 
 - `homes/` and `redirect/` under the data root are reserved now.

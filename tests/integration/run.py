@@ -248,6 +248,11 @@ def main() -> int:
     check(FILES_IP not in upd.stdout + upd.stderr, "samba_dnsupdate on the DC does not see .53")
     check(dc_a_records() == records_before, "DC A records unchanged", f"{records_before} → {dc_a_records()}")
 
+    # --- macOS support on for the whole rest of the run (1.1.0) --------------------------------------------------
+    st, body = fs("PUT", "/api/settings", {"macos": True})
+    check(st == 200 and body["macos"] and "neu verbinden" in body["notice"], "PUT /api/settings macos=true with notice",
+          json.dumps(body))
+
     # --- shares -------------------------------------------------------------------------------------------------
     st, body = fs("POST", "/api/shares", {"name": "a/b"})
     check(st == 422 and "name" in body["fields"], "POST share: bad name → 422")
@@ -313,6 +318,9 @@ def main() -> int:
     if not check("a.txt" in rec, "recycle bin: deleted file in .recycle/<user>", rec):
         diag("recycle")
     check(".recycle" not in smb("carol", "ls"), "recycle bin hidden from carol")
+    smb("alice", "put /etc/hostname ._apple; rm ._apple")
+    left = dexec("ci-file", "sh", "-c", f"ls {SHARE_DIR}/.recycle/*/._apple 2>/dev/null").stdout
+    check(left == "", "._* files skip the recycle bin", left)
     check(dexec("ci-file", "getfattr", "-n", "user.NTACL", f"{SHARE_DIR}/.recycle").returncode == 0, ".recycle ACL set")
 
     def job_done(resp):
@@ -343,12 +351,23 @@ def main() -> int:
     dexec("ci-client", "sh", "-c", "echo eins > /tmp/v1; echo zwei > /tmp/v2")
     check(ok_out(smb("alice", "put /tmp/v1 v1.txt")), "alice writes v1.txt (eins)")
     dexec("ci-file", "sh", "-c", f"head -c 5242880 /dev/urandom > '{SHARE_DIR}/blob.bin'")  # 5 MiB, unchanged later
+    conf = dexec("ci-file", "cat", "/etc/samba/smb.conf").stdout
+    check("vfs objects = fruit streams_xattr acl_xattr shadow_copy2 recycle" in conf and "fruit:nfs_aces = no" in conf,
+          "smb.conf: fruit + streams_xattr first, nfs_aces off")
+    out = smb("alice", "put /tmp/v1 ads.txt; put /tmp/v2 ads.txt:meinstream; get ads.txt:meinstream /tmp/stream")
+    stream = dexec("ci-client", "cat", "/tmp/stream").stdout.strip()
+    xattrs = dexec("ci-file", "getfattr", "-d", "-m", "user.DosStream", f"{SHARE_DIR}/ads.txt").stdout
+    check(ok_out(out) and stream == "zwei" and "meinstream" in xattrs,
+          "alternate data stream written, read back, stored as user.DosStream xattr", (out + xattrs)[-300:])
     job = job_done(fs("POST", f"/api/shares/{SHARE}/snapshots"))
     check(job and job["state"] == "done", "manual snapshot job done", json.dumps(job))
     st, body = fs("GET", f"/api/shares/{SHARE}/snapshots")
     snap1 = body["items"][0]["id"] if st == 200 and body["items"] else ""
     check(snap1.startswith("@GMT-") and body["items"][0]["files"] > 0 and body["items"][0]["manual"],
           "snapshot listed", json.dumps(body)[:300])
+    snap_xattrs = dexec("ci-file", "getfattr", "-d", "-m", "user.DosStream",
+                        f"/srv/files/.pk95/snapshots/{SHARE}/{snap1}/ads.txt").stdout
+    check("meinstream" in snap_xattrs, "the stream is in the snapshot", snap_xattrs[-200:])
     check(body["items"] and body["items"][0]["unique_bytes"] >= 5 * 1024 * 1024,
           "first snapshot is a full copy: unique_bytes counts the 5 MiB file", json.dumps(body["items"][:1]))
     check("shadow_copy2" in dexec("ci-file", "cat", "/etc/samba/smb.conf").stdout, "smb.conf: shadow_copy2 on the share")

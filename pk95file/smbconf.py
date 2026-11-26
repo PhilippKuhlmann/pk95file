@@ -14,6 +14,20 @@ HEADER = (
 RID_LOW, RID_HIGH = 10000, 64999   # idmap rid: Unix ID = 10000 + RID (docs/design.md §5)
 DEFAULT_LOW, DEFAULT_HIGH = 3000, 7999
 MAX_RID = RID_HIGH - RID_LOW
+# macOS support (docs/design.md §9a): one server setting, the same VFS chain on every share – vfs_fruit negotiates
+# the Apple extension (AAPL) at a connection's first tree connect, so shares must not differ.
+MAC_VFS = ["fruit", "streams_xattr"]
+MAC_OPTIONS = [
+    "    fruit:metadata = stream",
+    "    fruit:resource = file",          # not "stream": xattrs hold at most 64 KiB (ext4: one 4 KiB block)
+    "    fruit:nfs_aces = no",             # default yes would write POSIX modes as NFS ACEs into the NT ACLs
+    "    fruit:posix_rename = yes",
+    "    fruit:veto_appledouble = yes",
+    "    fruit:wipe_intentionally_left_blank_rfork = yes",
+    "    fruit:delete_empty_adfiles = yes",
+    "    fruit:convert_adfile = yes",     # existing ._* files become streams on access
+]
+RECYCLE_ALWAYS_EXCLUDE = ["._*", ".DS_Store"]   # macOS helper files never go to the recycle bin
 HOSTS_MARK = "# pk95file"
 
 
@@ -50,7 +64,7 @@ def global_section(s: dict) -> list[str]:
         f"    idmap config {wg} : range = {RID_LOW}-{RID_HIGH}",
         "    template shell = /bin/false",
         "    template homedir = /nonexistent",
-        "    vfs objects = acl_xattr",
+        "    vfs objects = " + " ".join((MAC_VFS if s.get("macos") else []) + ["acl_xattr"]),
         "    acl_xattr:security_acl_name = user.NTACL",
         "    acl_xattr:ignore system acls = yes",
         "    map acl inherit = yes",
@@ -66,16 +80,18 @@ def global_section(s: dict) -> list[str]:
         "    max log size = 1000",
         "    log level = 1",
     ]
+    if s.get("macos"):
+        lines += MAC_OPTIONS
     if s.get("min_protocol") and s["min_protocol"] != "SMB2_10":
         lines[lines.index("    server min protocol = SMB2_10")] = f"    server min protocol = {s['min_protocol']}"
     return lines
 
 
-def share_section(share: dict, shares_root: str, snapshots_root: str = "") -> list[str]:
+def share_section(share: dict, shares_root: str, snapshots_root: str = "", macos: bool = False) -> list[str]:
     from .snapshots import smb_lines
 
     path = os.path.join(shares_root, share["name"])
-    vfs = ["acl_xattr"]
+    vfs = (list(MAC_VFS) if macos else []) + ["acl_xattr"]   # fruit and streams_xattr first
     lines = [
         "",
         f"[{share['name']}]",
@@ -102,8 +118,9 @@ def share_section(share: dict, shares_root: str, snapshots_root: str = "") -> li
             "    recycle:exclude_dir = .recycle",
             "    hide files = /.recycle/",
         ]
-        if rec.get("exclude"):
-            lines.append("    recycle:exclude = " + "|".join(rec["exclude"]))
+        excludes = list(rec.get("exclude") or [])
+        excludes += [x for x in RECYCLE_ALWAYS_EXCLUDE if x not in excludes]
+        lines.append("    recycle:exclude = " + "|".join(excludes))
         if rec.get("max_file_mb"):
             lines.append(f"    recycle:maxsize = {int(rec['max_file_mb']) * 1024 * 1024}")
     lines.insert(3, f"    vfs objects = {' '.join(vfs)}")
@@ -113,7 +130,7 @@ def share_section(share: dict, shares_root: str, snapshots_root: str = "") -> li
 def render(settings: dict, shares: list[dict], shares_root: str, snapshots_root: str = "") -> str:
     lines = [HEADER] + global_section(settings)
     for share in sorted(shares, key=lambda x: x["name"].lower()):
-        lines += share_section(share, shares_root, snapshots_root)
+        lines += share_section(share, shares_root, snapshots_root, bool(settings.get("macos")))
     return "\n".join(lines) + "\n"
 
 
