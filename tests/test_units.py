@@ -311,6 +311,22 @@ class SnapshotsTest(unittest.TestCase):
         left = set(ids) - set(to_delete(ids, {"recent": 1, "daily": 0, "weekly": 4}, now))
         self.assertTrue(4 <= len(left) <= 5)
 
+    def test_measure(self):
+        from pk95file.snapshots import measure
+        with tempfile.TemporaryDirectory() as d:
+            first, second = os.path.join(d, "s1"), os.path.join(d, "s2")
+            os.makedirs(os.path.join(first, "Ordner"))
+            os.makedirs(second)
+            with open(os.path.join(first, "Ordner", "big.bin"), "wb") as fh:
+                fh.truncate(81 * 1024 * 1024)  # sparse: almost no blocks, like ZFS right after rsync
+            with open(os.path.join(first, "small.txt"), "w") as fh:
+                fh.write("eins")
+            self.assertEqual(measure(first), (2, 81 * 1024 * 1024 + 4))  # first snapshot: a full copy
+            os.link(os.path.join(first, "Ordner", "big.bin"), os.path.join(second, "big.bin"))
+            with open(os.path.join(second, "small.txt"), "w") as fh:
+                fh.write("zwei!")
+            self.assertEqual(measure(second), (2, 5))  # unchanged big.bin is shared, only the changed file counts
+
     def test_smbconf_shadow(self):
         share = {"name": "Buchhaltung", "enabled": True, "abe": True, "locked": False, "recycle": {"enabled": True},
                  "snapshots": {"enabled": True}}

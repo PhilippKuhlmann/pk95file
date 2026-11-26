@@ -61,6 +61,24 @@ def to_delete(ids: list[str], keep: dict, now: datetime) -> list[str]:
     return [i for _, i in dated if i not in keepers]
 
 
+def measure(snap_path: str) -> tuple[int, int]:
+    """(files, unique bytes) of one snapshot. Unique = apparent size (st_size) of the files with link count 1, i.e.
+    not hardlinked to another snapshot: the whole share for the first snapshot (a full copy), only changed files
+    after that. st_size, not st_blocks: right after rsync, ZFS reports almost no blocks until the transaction group
+    is written (and compression shrinks them further) – the live test saw 2048 bytes for an 81 MB first copy."""
+    files, unique = 0, 0
+    for dirpath, _dirs, names in os.walk(snap_path):
+        for n in names:
+            try:
+                st = os.lstat(os.path.join(dirpath, n))
+            except OSError:
+                continue
+            files += 1
+            if st.st_nlink == 1:
+                unique += st.st_size
+    return files, unique
+
+
 def smb_lines(share_dir: str, snap_dir: str) -> list[str]:
     """shadow_copy2 options for one share: the share root is the "mount point" and each snapshot an image of it."""
     return [
@@ -181,16 +199,7 @@ class Snapshots:
                 lines = (res.stderr or res.stdout).strip().splitlines()
                 raise RuntimeError(f"rsync fehlgeschlagen (Code {res.returncode}): {lines[-1] if lines else ''}")
             os.rename(tmp, os.path.join(base, sid))
-            files, unique = 0, 0
-            for dirpath, _dirs, names in os.walk(os.path.join(base, sid)):
-                for n in names:
-                    try:
-                        stt = os.lstat(os.path.join(dirpath, n))
-                    except OSError:
-                        continue
-                    files += 1
-                    if stt.st_nlink == 1:
-                        unique += stt.st_blocks * 512
+            files, unique = measure(os.path.join(base, sid))
             idx = self._index(share)
             idx[sid] = {"manual": manual, "files": files, "unique_bytes": unique,
                         "duration_ms": int((time.monotonic() - started) * 1000)}
