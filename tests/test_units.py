@@ -289,5 +289,39 @@ class RecycleSchedulerTest(unittest.TestCase):
         self.assertEqual(next_slot(times, days, datetime(2026, 11, 27, 18, 0)), datetime(2026, 11, 30, 7, 0))
 
 
+class SnapshotsTest(unittest.TestCase):
+    def test_ids(self):
+        from datetime import datetime, timezone
+        from pk95file.snapshots import parse_id, snap_id
+        at = datetime(2026, 11, 25, 11, 0, 5, tzinfo=timezone.utc)
+        self.assertEqual(snap_id(at), "@GMT-2026.11.25-11.00.05")
+        self.assertEqual(parse_id("@GMT-2026.11.25-11.00.05"), at)
+        self.assertIsNone(parse_id("@GMT-2026.11.25-11.00.05.tmp"))
+
+    def test_retention(self):
+        from datetime import datetime, timedelta, timezone
+        from pk95file.snapshots import snap_id, to_delete
+        now = datetime(2026, 11, 25, 18, 0, tzinfo=timezone.utc)
+        ids = [snap_id(now - timedelta(hours=h)) for h in range(0, 24 * 40, 6)]  # every 6 h for 40 days
+        self.assertEqual(to_delete(ids, {"recent": len(ids), "daily": 0, "weekly": 0}, now), [])
+        left = set(ids) - set(to_delete(ids, {"recent": 2, "daily": 3, "weekly": 0}, now))
+        self.assertEqual(len(left), 2 + 2)  # 2 newest (today) + newest of yesterday and the day before
+        left = set(ids) - set(to_delete(ids, {"recent": 1, "daily": 0, "weekly": 0}, now))
+        self.assertEqual(left, {ids[0]})
+        left = set(ids) - set(to_delete(ids, {"recent": 1, "daily": 0, "weekly": 4}, now))
+        self.assertTrue(4 <= len(left) <= 5)
+
+    def test_smbconf_shadow(self):
+        share = {"name": "Buchhaltung", "enabled": True, "abe": True, "locked": False, "recycle": {"enabled": True},
+                 "snapshots": {"enabled": True}}
+        text = smbconf.render(SETTINGS, [share], "/srv/files/shares", "/srv/files/.pk95/snapshots")
+        self.assertIn("vfs objects = acl_xattr shadow_copy2 recycle", text)
+        self.assertIn("shadow:mountpoint = /srv/files/shares/Buchhaltung", text)
+        self.assertIn("shadow:snapdir = /srv/files/.pk95/snapshots/Buchhaltung", text)
+        self.assertIn("shadow:format = @GMT-%Y.%m.%d-%H.%M.%S", text)
+        share["snapshots"]["enabled"] = False
+        self.assertNotIn("shadow_copy2", smbconf.render(SETTINGS, [share], "/srv/files/shares", "/x"))
+
+
 if __name__ == "__main__":
     unittest.main()

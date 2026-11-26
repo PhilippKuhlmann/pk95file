@@ -69,7 +69,9 @@ def global_section(s: dict) -> list[str]:
     return lines
 
 
-def share_section(share: dict, shares_root: str) -> list[str]:
+def share_section(share: dict, shares_root: str, snapshots_root: str = "") -> list[str]:
+    from .snapshots import smb_lines
+
     path = os.path.join(shares_root, share["name"])
     vfs = ["acl_xattr"]
     lines = [
@@ -82,6 +84,9 @@ def share_section(share: dict, shares_root: str) -> list[str]:
         f"    hide unreadable = {'yes' if share.get('abe', True) else 'no'}",
         "    veto files = /.pk95-*/",
     ]
+    if snapshots_root and (share.get("snapshots") or {}).get("enabled"):
+        vfs.append("shadow_copy2")  # previous versions in Explorer (docs/design.md §7)
+        lines += smb_lines(path, os.path.join(snapshots_root, share["name"]))
     rec = share.get("recycle") or {}
     if rec.get("enabled"):
         vfs.append("recycle")
@@ -103,10 +108,10 @@ def share_section(share: dict, shares_root: str) -> list[str]:
     return lines
 
 
-def render(settings: dict, shares: list[dict], shares_root: str) -> str:
+def render(settings: dict, shares: list[dict], shares_root: str, snapshots_root: str = "") -> str:
     lines = [HEADER] + global_section(settings)
     for share in sorted(shares, key=lambda x: x["name"].lower()):
-        lines += share_section(share, shares_root)
+        lines += share_section(share, shares_root, snapshots_root)
     return "\n".join(lines) + "\n"
 
 

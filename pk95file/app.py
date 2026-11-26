@@ -14,6 +14,7 @@ from .jobs import Jobs
 from .monitor import Monitor, rid_warning
 from .recycle import Recycle
 from .scheduler import Scheduler
+from .snapshots import Snapshots
 from .setup import Setup
 from .shares import Shares
 from .store import load_json, now_ms, save_json, write_text
@@ -57,6 +58,8 @@ class App:
         self.recycle = Recycle(self)
         self.scheduler = Scheduler(self)
         self.scheduler.add("recycle", self.recycle.task)
+        self.snapshots = Snapshots(self)
+        self.scheduler.add("snapshots", self.snapshots.task)
         self.backup_active = False
         self._backup_timer: threading.Timer | None = None
         self._lock = threading.RLock()
@@ -115,7 +118,8 @@ class App:
         s = {**self.settings, **self.app_settings()}
         if not s.get("hostname"):
             return
-        write_text(self.cfg.smb_conf, smbconf.render(s, self.shares.raw(), self.cfg.shares_root))
+        write_text(self.cfg.smb_conf, smbconf.render(s, self.shares.raw(), self.cfg.shares_root,
+                                                     os.path.join(self.cfg.meta_root, "snapshots")))
         write_text(self.cfg.krb5_conf, smbconf.krb5(s))
         try:
             with open(self.cfg.hosts_file, encoding="utf-8") as fh:
@@ -143,7 +147,8 @@ class App:
 
     def prepare_data_root(self) -> None:
         os.makedirs(self.cfg.shares_root, mode=0o755, exist_ok=True)
-        os.makedirs(self.cfg.meta_root, mode=0o700, exist_ok=True)
+        os.makedirs(self.cfg.meta_root, exist_ok=True)
+        os.chmod(self.cfg.meta_root, 0o755)  # shadow_copy2 reads .pk95/snapshots as the connected user
         write_text(os.path.join(self.cfg.data_root, ".pxarexclude"), "/.pk95/snapshots\n")
 
     # -- processes ---------------------------------------------------------------------------------------------
@@ -281,7 +286,7 @@ class App:
                         "recycle_bytes": rec_bytes, "scanned_at": scan.get("scanned_at", 0)},
             "sessions": sessions,
             "open_files": open_files,
-            "snapshots": {"last_run_at": 0, "last_ok": True, "next_run_at": 0, "failed_shares": [], "count": 0},
+            "snapshots": self.snapshots.dashboard(),
             "warnings": warnings,
         }
 

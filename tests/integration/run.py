@@ -337,6 +337,46 @@ def main() -> int:
     check(job and job["state"] == "done" and fs("GET", f"/api/shares/{SHARE}/recycle")[1]["total"] == 0,
           "recycle empty", json.dumps(job))
 
+    # --- snapshots ("Vorgängerversionen") ----------------------------------------------------------------------------
+    st, body = fs("GET", f"/api/shares/{SHARE}/snapshots")
+    check(st == 200 and body["items"] == [] and body["backend"] == "rsync", "no snapshots yet")
+    dexec("ci-client", "sh", "-c", "echo eins > /tmp/v1; echo zwei > /tmp/v2")
+    check(ok_out(smb("alice", "put /tmp/v1 v1.txt")), "alice writes v1.txt (eins)")
+    job = job_done(fs("POST", f"/api/shares/{SHARE}/snapshots"))
+    check(job and job["state"] == "done", "manual snapshot job done", json.dumps(job))
+    st, body = fs("GET", f"/api/shares/{SHARE}/snapshots")
+    snap1 = body["items"][0]["id"] if st == 200 and body["items"] else ""
+    check(snap1.startswith("@GMT-") and body["items"][0]["files"] > 0 and body["items"][0]["manual"],
+          "snapshot listed", json.dumps(body)[:300])
+    check("shadow_copy2" in dexec("ci-file", "cat", "/etc/samba/smb.conf").stdout, "smb.conf: shadow_copy2 on the share")
+    check(ok_out(smb("alice", "put /tmp/v2 v1.txt")), "alice overwrites v1.txt (zwei)")
+    out = smb("alice", "allinfo v1.txt")
+    if not check(snap1 and snap1 in out, "allinfo shows the previous version (FSCTL_SRV_ENUMERATE_SNAPSHOTS)",
+                 out[-400:]):
+        diag("snapshots")
+    smb("alice", f"get {snap1}/v1.txt /tmp/old; get v1.txt /tmp/new")
+    old_v = dexec("ci-client", "cat", "/tmp/old").stdout.strip()
+    new_v = dexec("ci-client", "cat", "/tmp/new").stdout.strip()
+    check(old_v == "eins" and new_v == "zwei", "@GMT path returns the old content, the share the new one",
+          f"old={old_v!r} new={new_v!r}")
+    time.sleep(1.5)
+    job = job_done(fs("POST", f"/api/shares/{SHARE}/snapshots"))
+    ids = [i["id"] for i in fs("GET", f"/api/shares/{SHARE}/snapshots")[1]["items"]]
+    links = dexec("ci-file", "stat", "-c", "%h", f"/srv/files/.pk95/snapshots/{SHARE}/{ids[0]}/k.txt").stdout.strip()
+    check(job and job["state"] == "done" and len(ids) == 2 and links == "2",
+          "second snapshot hardlinks the unchanged file to the first", f"ids={ids} links={links}")
+    st, _ = fs("PUT", f"/api/shares/{SHARE}", {"snapshots": {"keep": {"recent": 1, "daily": 0, "weekly": 0}}})
+    time.sleep(1.5)
+    job_done(fs("POST", f"/api/shares/{SHARE}/snapshots"))
+    ids = [i["id"] for i in fs("GET", f"/api/shares/{SHARE}/snapshots")[1]["items"]]
+    check(st == 200 and len(ids) == 1, "retention keeps only the newest (recent 1)", str(ids))
+    st, dash = fs("GET", "/api/dashboard")
+    check(dash["snapshots"]["count"] == 1 and dash["snapshots"]["next_run_at"] > 0, "dashboard snapshot block",
+          json.dumps(dash["snapshots"]))
+    job = job_done(fs("DELETE", f"/api/shares/{SHARE}/snapshots/{ids[0]}")) if ids else None
+    check(job and job["state"] == "done" and fs("GET", f"/api/shares/{SHARE}/snapshots")[1]["items"] == [],
+          "DELETE snapshot")
+
     # --- changes --------------------------------------------------------------------------------------------------
     st, body = fs("PUT", f"/api/shares/{SHARE}/permissions",
                   {"permissions": [perms[0], {"sid": sids["Leitung"], "access": "full"}], "propagate": True})

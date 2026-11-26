@@ -72,6 +72,13 @@ def build(app: App) -> Router:
         return job_response(app.shares.delete(req.params["name"], req.flag("delete_data")))
     r.add("DELETE", f"/api/shares/{NAME}", ready(delete_share))
 
+    # Snapshots ("Vorgängerversionen")
+    r.add("GET", f"/api/shares/{NAME}/snapshots", lambda req: app.snapshots.list(req.params["name"]))
+    r.add("POST", f"/api/shares/{NAME}/snapshots",
+          lambda req: job_response(app.snapshots.create(req.params["name"], manual=True)))
+    r.add("DELETE", "/api/shares/{name:[^/]+}/snapshots/{snap:@GMT-[0-9.-]+}",
+          lambda req: job_response(app.snapshots.delete(req.params["name"], req.params["snap"])))
+
     # Recycle bin
     r.add("GET", f"/api/shares/{NAME}/recycle", lambda req: app.recycle.list(req.params["name"], req))
     r.add("POST", f"/api/shares/{NAME}/recycle/restore",
