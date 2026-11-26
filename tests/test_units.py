@@ -323,5 +323,37 @@ class SnapshotsTest(unittest.TestCase):
         self.assertNotIn("shadow_copy2", smbconf.render(SETTINGS, [share], "/srv/files/shares", "/x"))
 
 
+class UsageTest(unittest.TestCase):
+    def test_quota_level(self):
+        from pk95file.usage import quota_level
+        q = {"size_bytes": 1000, "warn_percent": 90}
+        self.assertEqual(quota_level(10, {"size_bytes": 0}), "ok")
+        self.assertEqual(quota_level(899, q), "ok")
+        self.assertEqual(quota_level(900, q), "warning")
+        self.assertEqual(quota_level(1001, q), "exceeded")
+
+    def test_uid_to_sid_and_dfree(self):
+        from pk95file.dfree import answer
+        from pk95file.usage import uid_to_sid
+        self.assertEqual(uid_to_sid(11103, DSID), DSID + "-1103")
+        self.assertEqual(uid_to_sid(0, DSID), "")
+        self.assertEqual(answer(100, 60, 0, 0), (100, 60))
+        self.assertEqual(answer(100, 60, 50, 20), (50, 30))
+        self.assertEqual(answer(100, 10, 50, 20), (50, 10))
+        self.assertEqual(answer(100, 60, 50, 80), (50, 0))
+
+    def test_scan_tree(self):
+        from pk95file.usage import scan_tree
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, ".recycle", "u"))
+            os.makedirs(os.path.join(d, "Ordner"))
+            for rel, size in (("a", 10), ("Ordner/b", 20), (".recycle/u/c", 1000)):
+                with open(os.path.join(d, rel), "wb") as fh:
+                    fh.write(b"x" * size)
+            total, files, owners = scan_tree(d)
+            self.assertEqual((total, files), (30, 2))
+            self.assertEqual(sum(v[0] for v in owners.values()), 30)
+
+
 if __name__ == "__main__":
     unittest.main()

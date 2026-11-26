@@ -56,6 +56,8 @@ def global_section(s: dict) -> list[str]:
         "    map acl inherit = yes",
         "    store dos attributes = yes",
         "    access based share enum = yes",
+        "    dfree command = /opt/pk95file/bin/dfree",   # soft quota as the disk size Explorer shows (§8)
+        "    dfree cache time = 60",
         "    load printers = no",
         "    printing = bsd",
         "    printcap name = /dev/null",
