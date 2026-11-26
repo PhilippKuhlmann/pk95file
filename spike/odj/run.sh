@@ -104,6 +104,9 @@ docker exec spike-dc samba-tool user create alice "$USER_PW" -H "$SAM" >/dev/nul
 docker exec spike-dc samba-tool group add SpikeGroup -H "$SAM" >/dev/null || die "create group"
 docker exec spike-dc samba-tool group addmembers SpikeGroup alice -H "$SAM" >/dev/null || die "add member"
 docker exec spike-dc samba-tool user create bob "$USER_PW" -H "$SAM" >/dev/null || die "create user bob (not in the group)"
+docker exec spike-dc samba-tool user create carol "$USER_PW" -H "$SAM" >/dev/null || die "create user carol"
+docker exec spike-dc samba-tool group add ReadGroup -H "$SAM" >/dev/null || die "create ReadGroup"
+docker exec spike-dc samba-tool group addmembers ReadGroup carol -H "$SAM" >/dev/null || die "add carol"
 ALICE_SID=$(docker exec spike-dc samba-tool user show alice -H "$SAM" --attributes=objectSid | sed -n 's/^objectSid: //p')
 ALICE_RID=${ALICE_SID##*-}
 info "alice $ALICE_SID → expected Unix ID $((10000 + ALICE_RID)) (rid backend)"
@@ -179,6 +182,7 @@ docker exec spike-files arping -U -q -c 2 -I eth0 "$FILES_IP" || info "gratuitou
 pass "secondary address $FILES_IP added to eth0 inside the container"
 
 docker cp member-smb.conf spike-files:/etc/samba/smb.conf >/dev/null
+docker cp ../../pk95file spike-files:/opt/pk95file >/dev/null || die "copy pk95file into the member"
 docker exec spike-files sh -c "printf '%s\n' '$KRB5_CONF' > /etc/krb5.conf
 	mkdir -p /srv/files/shares/spike && chmod 1777 /srv/files/shares/spike
 	testparm -s >/dev/null 2>&1" || die "member config (testparm)"
@@ -225,24 +229,16 @@ else fail "smbd listens on: $listen"; fi
 docker run -d --name spike-client --network "$NET" --ip "$CLIENT_IP" "${HOSTS[@]}" "$MEMBER_IMAGE" >/dev/null || die "start client"
 docker exec spike-client sh -c "printf '%s\n' '$KRB5_CONF' > /etc/krb5.conf"
 docker exec spike-client sh -c "printf '[global]\\n    workgroup = $WG\\n    realm = $REALM_UP\\n' > /etc/samba/smb.conf"
-# Share root ACL as PK95 File will set it (docs/design.md §9): in-process with samba.ntacls on the member,
-# SpikeGroup change, Domain Admins + SYSTEM full.
+# Share root ACL through pk95file.acl_helper (s3 param context with the share loaded, setntacl(service=…)):
+# SpikeGroup change, ReadGroup read, Domain Admins + SYSTEM full.
 GROUP_SID=$(docker exec spike-files wbinfo -n "$WG\\SpikeGroup" | awk '{print $1}')
-SDDL="O:S-1-22-1-0G:S-1-22-2-0D:PAI(A;OICI;FA;;;DA)(A;OICI;FA;;;SY)(A;OICI;0x1301bf;;;$GROUP_SID)"
-if docker exec spike-files python3 -c "
-import sys
-from samba.param import LoadParm
-from samba.ntacls import setntacl
-from samba.auth_util import system_session_unix
-import samba
-lp = LoadParm(); lp.load('/etc/samba/smb.conf')
-samba.set_debug_level(10)
-setntacl(lp, '/srv/files/shares/spike', sys.argv[1], sys.argv[2], system_session_unix(), use_ntvfs=False)
-" "$SDDL" "$DOM_SID" >"$TMP/setntacl.out" 2>&1; then
-	pass "root ACL set in-process (samba.ntacls.setntacl): $SDDL"
+READ_SID=$(docker exec spike-files wbinfo -n "$WG\\ReadGroup" | awk '{print $1}')
+SDDL=$(cd ../.. && python3 -c "from pk95file import acl; print(acl.share_root_sddl('$DOM_SID', [{'sid': '$GROUP_SID', 'access': 'change'}, {'sid': '$READ_SID', 'access': 'read'}]))")
+if docker exec -e PYTHONPATH=/opt spike-files python3 -m pk95file.acl_helper /etc/samba/smb.conf set /srv/files/shares/spike "$SDDL" "$DOM_SID" spike >"$TMP/setntacl.out" 2>&1; then
+	pass "root ACL set by pk95file.acl_helper: $(tail -n 1 "$TMP/setntacl.out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["sddl"])')"
 else
-	info "ACL follow-up (build): setntacl refused: $(tail -n 1 "$TMP/setntacl.out")"
-	echo "----- setntacl debug trace (last 60 lines) -----"; tail -n 60 "$TMP/setntacl.out"; echo "-----"
+	fail "acl_helper set: $(tail -n 3 "$TMP/setntacl.out" | tr '\n' ' ')"
+	echo "----- acl_helper output -----"; tail -n 40 "$TMP/setntacl.out"; echo "-----"
 fi
 # Administrator without username map: a normal domain user (rid uid 10500) with Full Control through Domain Admins.
 if docker exec spike-files net sam rights grant "$WG\\Domain Admins" SeDiskOperatorPrivilege >/dev/null 2>&1; then
@@ -251,10 +247,10 @@ else
 	info "net sam rights grant SeDiskOperatorPrivilege failed"
 fi
 if docker exec spike-client smbcacls "//$FILES_IP/spike" / -U "$WG\\Administrator%$ADMIN_PW" >"$TMP/cacls.out" 2>&1 \
-	&& grep -q 'Domain Admins:ALLOWED/OI|CI/FULL' "$TMP/cacls.out"; then
+	&& grep -qi 'domain admins:ALLOWED/OI|CI/FULL' "$TMP/cacls.out"; then
 	pass "Administrator (Domain Admins, no username map) reads the root ACL over SMB"
 else
-	info "ACL follow-up (build): Administrator over SMB: $(tail -n 3 "$TMP/cacls.out" | tr '\n' ' ')"
+	fail "Administrator over SMB: $(tail -n 3 "$TMP/cacls.out" | tr '\n' ' ')"
 fi
 if docker exec spike-client smbclient "//$FILES_IP/spike" -U "$WG\\Administrator%$ADMIN_PW" -m SMB3 -c 'put /etc/hostname admin.txt' >/dev/null 2>&1; then
 	pass "Administrator writes through Domain Admins Full Control"
@@ -262,7 +258,7 @@ else
 	fail "Administrator cannot write"
 fi
 if docker exec spike-files getfattr -n user.NTACL /srv/files/shares/spike >/dev/null 2>&1; then pass "share root NT ACL stored in user.NTACL"
-else info "ACL follow-up (build): no user.NTACL on the share root"; fi
+else fail "no user.NTACL on the share root"; fi
 if docker exec spike-client smbclient "//$FILES_IP/spike" -U "$WG\\alice%$USER_PW" -m SMB3 -c 'put /etc/hostname ntlm.txt; ls' >/dev/null 2>&1; then
 	pass "NTLM: alice writes to //$FILES_IP/spike"
 else
@@ -282,10 +278,26 @@ owner=$(docker exec spike-files stat -c %u /srv/files/shares/spike/ntlm.txt 2>/d
 if [ "$owner" = "$((10000 + ALICE_RID))" ]; then pass "file owner on disk = alice's rid Unix ID ($owner)"
 else fail "file owner on disk: '$owner'"; fi
 if docker exec spike-files getfattr -n user.NTACL /srv/files/shares/spike/ntlm.txt >/dev/null 2>&1; then pass "inherited NT ACL stored in user.NTACL on the new file"
-else info "ACL follow-up (build): no user.NTACL on the written file"; fi
+else fail "no user.NTACL on the written file"; fi
 out=$(docker exec spike-client smbclient "//$FILES_IP/spike" -U "$WG\\bob%$USER_PW" -m SMB3 -c 'put /etc/hostname bob.txt' 2>&1)
 if echo "$out" | grep -q 'NT_STATUS_ACCESS_DENIED'; then pass "bob (not in SpikeGroup) cannot write: NT ACL enforced"
-else info "ACL follow-up (build): bob write was not denied: $(echo "$out" | tail -n 2 | tr '\n' ' ')"; fi
+else fail "bob write was not denied: $(echo "$out" | tail -n 2 | tr '\n' ' ')"; fi
+out=$(docker exec spike-client smbclient "//$FILES_IP/spike" -U "$WG\\carol%$USER_PW" -m SMB3 -c 'get ntlm.txt /tmp/x; put /etc/hostname carol.txt' 2>&1)
+if echo "$out" | grep -q 'getting file' && echo "$out" | grep -q 'NT_STATUS_ACCESS_DENIED'; then pass "carol (ReadGroup, read) reads but cannot write"
+else fail "carol read-only: $(echo "$out" | tail -n 3 | tr '\n' ' ')"; fi
+out=$(docker exec spike-client smbcacls "//$FILES_IP/spike" / -U "$WG\\alice%$USER_PW" --add "ACL:$WG\\bob:ALLOWED/OI|CI/READ" 2>&1)
+if echo "$out" | grep -q 'NT_STATUS_ACCESS_DENIED'; then pass "alice (change) cannot change the ACL"
+else fail "alice changed the ACL: $(echo "$out" | tail -n 2 | tr '\n' ' ')"; fi
+if docker exec spike-client smbcacls "//$FILES_IP/spike" /ntlm.txt -U "$WG\\Administrator%$ADMIN_PW" --add "ACL:$WG\\bob:ALLOWED/0x0/READ" >/dev/null 2>&1; then
+	pass "Administrator (Domain Admins, full) changes an ACL over SMB"
+else
+	fail "Administrator cannot change an ACL"
+fi
+if docker exec -e PYTHONPATH=/opt spike-files python3 -m pk95file.acl_helper /etc/samba/smb.conf propagate /srv/files/shares/spike "$DOM_SID" spike '[".recycle"]' >"$TMP/prop.out" 2>&1; then
+	pass "acl_helper propagate: $(tail -n 1 "$TMP/prop.out")"
+else
+	fail "acl_helper propagate: $(tail -n 3 "$TMP/prop.out" | tr '\n' ' ')"
+fi
 
 # --- 8. rejoin: reset the account, new blob, requestodj again (POST /api/join later) ------------------------------------
 if [ "$ODJ_SOURCE" = endpoint ]; then

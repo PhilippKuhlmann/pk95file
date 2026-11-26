@@ -39,7 +39,7 @@ SMB again). Failed: setting the root ACL over SMB as Administrator (`NT_STATUS_I
 root), so the ACL checks had nothing to test. Decision: no `username map`; ACLs are set in-process with `setntacl`
 (`samba.auth_util.system_session_unix`, not `samba.auth`), Administrator works through Domain Admins.
 
-ACL follow-up for the build (not part of the ODJ question): writing the share root ACL in-process with
+
 `samba.ntacls.setntacl` (`use_ntvfs=False`, `system_session_unix()` from `samba.auth_util`, no `service`) is refused by
 `fset_nt_acl` with `NT_STATUS_ACCESS_DENIED` – also with root as owner, so no chown is involved. The spike reports these
 checks as INFO and prints a debug trace of the call; the build's integration test resolves it (alternatives: the

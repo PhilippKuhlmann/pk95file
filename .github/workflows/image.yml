@@ -1,0 +1,108 @@
+name: Test and publish image
+
+# Publishes ghcr.io/philippkuhlmann/pk95-file, the image PK95 Core starts (catalog "file").
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'  # Debian trixie's Python
+      - run: pip install pyflakes
+      - run: python -m pyflakes pk95file tests
+      - run: python -m unittest discover -s tests -t . -v
+
+  # Joins a real PK95 AD domain and drives the frozen API end to end, under the limits of the unprivileged Proxmox
+  # LXC: userns-remap (only 65536 IDs, no CAP_SYS_ADMIN, security.* xattrs fail). The file container shares the DC
+  # container's network namespace, exactly like both run with network_mode host in the LXC; the data root is an
+  # own ext4 filesystem like the Proxmox mount point.
+  integration:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Random API tokens for this run
+        run: |
+          for v in AD_TOKEN FILE_TOKEN; do
+            t=$(openssl rand -hex 24); echo "::add-mask::$t"; echo "$v=$t" >> "$GITHUB_ENV"
+          done
+      - name: Docker with userns-remap (IDs 0-65535 only, like the LXC)
+        run: |
+          sudo python3 - <<'EOF'
+          import json
+          path = "/etc/docker/daemon.json"
+          try:
+              conf = json.load(open(path))
+          except (OSError, ValueError):
+              conf = {}
+          conf["userns-remap"] = "default"
+          json.dump(conf, open(path, "w"), indent=2)
+          EOF
+          sudo systemctl restart docker
+          docker info --format '{{json .SecurityOptions}}'
+      - name: Data root on its own ext4 (like the Proxmox mount point)
+        run: |
+          sudo truncate -s 3G /var/tmp/files.img
+          sudo mkfs.ext4 -q /var/tmp/files.img
+          sudo mkdir -p /mnt/pk95files
+          sudo mount -o loop /var/tmp/files.img /mnt/pk95files
+          root=$(awk -F: '$1=="dockremap"{print $2; exit}' /etc/subuid)
+          sudo chown "$root:$root" /mnt/pk95files
+          ls -ln /mnt/pk95files/..
+      - uses: actions/checkout@v4
+      # Plain docker build: a BuildKit container builder would need --privileged, which userns-remap forbids.
+      - name: Build image
+        run: docker build -t pk95-file:ci .
+      - name: End-to-end test
+        run: python3 tests/integration/run.py pk95-file:ci ghcr.io/philippkuhlmann/pk95-ad:1.5.0 /mnt/pk95files
+      - name: Container logs
+        if: always()
+        run: |
+          echo "----- file -----"; docker logs ci-file 2>&1 | tail -200
+          echo "----- dc -----"; docker logs ci-dc 2>&1 | tail -80
+
+  image:
+    needs: [test, integration]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/philippkuhlmann/pk95-file
+          tags: |
+            # "latest" (what PK95 Core pulls) only from a release tag v1.2.3, so the image always
+            # carries the version the Core module checks; main builds are "main" and "sha-…".
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=main,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: VERSION=${{ startsWith(github.ref, 'refs/tags/v') && steps.meta.outputs.version || '1.0.0' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
