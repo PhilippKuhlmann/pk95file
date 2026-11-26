@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from . import VERSION, samba
+from . import VERSION
 from .app import App, manifest
 from .errors import invalid
 from .httpapi import Response, Router
@@ -94,19 +94,14 @@ def build(app: App) -> Router:
     r.add("GET", "/api/orphans", ready(lambda req: app.shares.orphans()))
     r.add("DELETE", f"/api/orphans/{NAME}", ready(lambda req: job_response(app.shares.delete_orphan(req.params["name"]))))
 
-    # Sessions (smbstatus)
-    def sessions(req):
-        st = samba.smbstatus()
-        items = []
-        for sid, s in (st.get("sessions") or {}).items():
-            items.append({"id": str(sid), "pid": int(str(s.get("server_id", {}).get("pid", 0)) or 0),
-                          "user": s.get("username", ""), "machine": s.get("remote_machine", ""),
-                          "hostname": s.get("hostname", ""), "protocol": s.get("session_dialect", ""),
-                          "encrypted": bool((s.get("encryption") or {}).get("cipher")),
-                          "signed": bool((s.get("signing") or {}).get("cipher")),
-                          "connected_at": 0, "shares": [], "open_files": 0})
-        return {"items": items, "total": len(items)}
-    r.add("GET", "/api/sessions", ready(sessions))
+    # Sessions and open files (smbstatus)
+    r.add("GET", "/api/sessions", lambda req: app.sessions.list())
+
+    def disconnect(req):
+        app.sessions.disconnect(req.params["id"])
+        return Response(204)
+    r.add("DELETE", "/api/sessions/{id:[0-9]+}", disconnect)
+    r.add("GET", "/api/open-files", lambda req: app.sessions.open_files(req.q("share")))
 
     # Jobs and settings
     r.add("GET", "/api/jobs", lambda req: {"items": app.jobs.list(req.q("kind"), req.q("state"))})

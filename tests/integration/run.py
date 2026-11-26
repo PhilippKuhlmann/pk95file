@@ -409,6 +409,20 @@ def main() -> int:
           "below the soft quota → unlocked, writes work")
     fs("PUT", f"/api/shares/{SHARE}", {"soft_quota": {"size_bytes": 0, "lock_when_exceeded": False}})
 
+    # --- sessions -----------------------------------------------------------------------------------------------
+    sh("docker", "exec", "-d", "ci-client", "sh", "-c",
+       f"(sleep 25; echo exit) | smbclient //{FILES_IP}/{SHARE} -m SMB3 -U '{WG}\\alice%{USER_PW}' >/dev/null 2>&1")
+    sess = wait(lambda: (lambda b: isinstance(b, dict) and [s for s in b.get("items", []) if "alice" in s["user"].lower()
+                                                           and SHARE in s["shares"]])(fs("GET", "/api/sessions")[1]), 20)
+    check(bool(sess), "GET /api/sessions shows alice on the share", json.dumps(fs("GET", "/api/sessions")[1])[:300])
+    st, of = fs("GET", f"/api/open-files?share={SHARE}")
+    check(st == 200 and isinstance(of.get("items"), list), "GET /api/open-files")
+    if sess:
+        check(fs("DELETE", f"/api/sessions/{sess[0]['id']}")[0] == 204, "DELETE session → 204")
+        gone = wait(lambda: not any(s["id"] == sess[0]["id"] for s in fs("GET", "/api/sessions")[1].get("items", [])), 15)
+        check(gone, "session is gone after disconnect")
+    check(fs("DELETE", "/api/sessions/999999")[0] == 404, "unknown session → 404")
+
     # --- changes --------------------------------------------------------------------------------------------------
     st, body = fs("PUT", f"/api/shares/{SHARE}/permissions",
                   {"permissions": [perms[0], {"sid": sids["Leitung"], "access": "full"}], "propagate": True})

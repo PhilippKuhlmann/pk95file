@@ -15,6 +15,7 @@ from .monitor import Monitor, rid_warning
 from .recycle import Recycle
 from .scheduler import Scheduler
 from .snapshots import Snapshots
+from .sessions import Sessions
 from .usage import Usage
 from .setup import Setup
 from .shares import Shares
@@ -63,6 +64,7 @@ class App:
         self.scheduler.add("snapshots", self.snapshots.task)
         self.usage = Usage(self)
         self.scheduler.add("usage", self.usage.task)
+        self.sessions = Sessions(self)
         self.backup_active = False
         self._backup_timer: threading.Timer | None = None
         self._lock = threading.RLock()
@@ -249,7 +251,7 @@ class App:
         snap_bytes = sum(v.get("snapshot_bytes", 0) for v in per.values())
         rec_bytes = sum(v.get("recycle_bytes", 0) for v in per.values())
         share_bytes = sum(v.get("bytes", 0) for v in per.values())
-        sessions, open_files = samba.counts(samba.smbstatus()) if self.state() == "ready" else (0, 0)
+        sessions, open_files = self.sessions.counts() if self.state() == "ready" else (0, 0)
         st = self.app_settings()
         warnings = []
         mon = self.monitor
