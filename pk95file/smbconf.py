@@ -90,7 +90,8 @@ def share_section(share: dict, shares_root: str) -> list[str]:
             "    recycle:keeptree = yes",
             "    recycle:versions = yes",
             "    recycle:touch_mtime = yes",
-            "    recycle:directory_mode = 0700",
+            "    recycle:directory_mode = 0777",   # the NT ACL (CREATOR OWNER) protects it, POSIX must not
+            "    recycle:subdir_mode = 0777",
             "    recycle:exclude_dir = .recycle",
             "    hide files = /.recycle/",
         ]

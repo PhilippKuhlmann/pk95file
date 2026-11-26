@@ -10,7 +10,7 @@ import threading
 import time
 
 from . import acl, samba, validate
-from .errors import Fields, not_found
+from .errors import Fields, conflict, not_found
 from .store import load_json, now_ms, save_json
 
 log = logging.getLogger("pk95file.shares")
@@ -24,6 +24,14 @@ DEFAULT_SNAPSHOTS = {"enabled": True, "schedule": {"times": ["07:00", "12:00", "
                      "keep": {"recent": 12, "daily": 14, "weekly": 8}}
 DEFAULT_SOFT_QUOTA = {"size_bytes": 0, "warn_percent": 90, "lock_when_exceeded": False}
 EMPTY_USAGE = {"bytes": 0, "files": 0, "recycle_bytes": 0, "snapshot_bytes": 0, "scanned_at": 0}
+
+
+def open_dir(path: str) -> None:
+    """Create a folder smbd manages: mode 0777, so the kernel never blocks what the NT ACL allows. With
+    "acl_xattr:ignore system acls" smbd checks only the NT ACL; POSIX bits of folders the app creates itself
+    (share roots, .recycle) would otherwise stop users (e.g. root-owned 0755 → nobody but root can create files)."""
+    os.makedirs(path, exist_ok=True)
+    os.chmod(path, 0o777)
 
 
 class Resolver:
@@ -296,7 +304,7 @@ class Shares:
                 share["permissions"] = self._permissions(body["permissions"], f)
             f.raise_if_any()
             existed = os.path.isdir(self.path(name))
-            os.makedirs(self.path(name), mode=0o755, exist_ok=True)
+            open_dir(self.path(name))
             self._items.append(share)
             self._save()
             self.app.write_config(reload=True)
@@ -306,6 +314,7 @@ class Shares:
                 else:
                     share["permissions"] = self.read_permissions(share) or share["permissions"]
                     self._save()
+                self.apply_share_sd(share)
                 self.ensure_recycle(share)
             except Exception:
                 self._items.remove(share)
@@ -343,19 +352,22 @@ class Shares:
             cur = self._find(name)
             perms = self._permissions(body.get("permissions"), f)
             f.raise_if_any()
-            job = None
-            if propagate:
-                job = self.app.jobs.start("permissions", lambda j: self._propagate(cur["name"], j),
-                                          share=cur["name"], exclusive=True)
+            if self.app.jobs.busy("permissions", cur["name"]):
+                raise conflict("Für diese Freigabe läuft bereits ein solcher Auftrag.")
             old = cur["permissions"]
             cur["permissions"] = perms
             try:
                 self.apply_acl(cur)
+                self.apply_share_sd(cur)
             except Exception:
                 cur["permissions"] = old
                 raise
             self._save()
             self.ensure_recycle(cur)
+            job = None
+            if propagate:  # after the root ACL is written: the walk inherits from the new one
+                job = self.app.jobs.start("permissions", lambda j: self._propagate(cur["name"], j),
+                                          share=cur["name"], exclusive=True)
             return self.public(copy.deepcopy(cur)), job
 
     def _propagate(self, name: str, job) -> None:
@@ -411,6 +423,12 @@ class Shares:
         self.app.acls.set(self.path(share["name"]), acl.share_root_sddl(dsid, share["permissions"]), dsid,
                           share["name"])
 
+    def apply_share_sd(self, share: dict) -> None:
+        """Share-level security descriptor (share_info.tdb). "access based share enum" filters the share list by
+        it, not by the folder ACL: Domain Admins, SYSTEM and the share's principals get FULL at share level (the NT
+        ACL on the folder decides read/change/full), everybody else does not see the share."""
+        samba.set_share_acl(share["name"], self.app.settings["domain_sid"], [p["sid"] for p in share["permissions"]])
+
     def read_permissions(self, share: dict) -> list[dict]:
         dsid = self.app.settings["domain_sid"]
         try:
@@ -423,7 +441,7 @@ class Shares:
         if not share["recycle"]["enabled"]:
             return
         rec = os.path.join(self.path(share["name"]), ".recycle")
-        os.makedirs(rec, mode=0o700, exist_ok=True)
+        open_dir(rec)
         dsid = self.app.settings["domain_sid"]
         self.app.acls.set(rec, acl.recycle_sddl(dsid, share["permissions"]), dsid, share["name"])
 
@@ -431,8 +449,9 @@ class Shares:
         """After a (re)setup: folders and root ACLs of the shares already in shares.json."""
         for s in self.raw():
             try:
-                os.makedirs(self.path(s["name"]), mode=0o755, exist_ok=True)
+                open_dir(self.path(s["name"]))
                 self.apply_acl(s)
+                self.apply_share_sd(s)
                 self.ensure_recycle(s)
             except Exception as exc:  # noqa: BLE001 - one share must not stop the others
                 log.error("share %s: %s", s["name"], exc)

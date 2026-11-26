@@ -59,7 +59,7 @@ def join_with_password(user: str, password: str, dns_hostname: str) -> None:
 
 
 def trust_ok() -> tuple[bool, str]:
-    res = run(["wbinfo", "-t"], timeout=30)
+    res = run(["wbinfo", "-t"], timeout=15)
     return res.returncode == 0, "" if res.returncode == 0 else _detail(res)
 
 
@@ -121,6 +121,19 @@ def sid_to_gid(sid: str) -> int | None:
 def grant(privilege: str, principal: str) -> str | None:
     res = run(["net", "sam", "rights", "grant", principal, privilege], timeout=30)
     return None if res.returncode == 0 else _detail(res)
+
+
+def share_acl_entries(domain_sid: str, sids: list[str]) -> str:
+    """sharesec ACL list: Domain Admins, SYSTEM and the given SIDs with FULL at share level (pure)."""
+    out = [f"{domain_sid}-512", "S-1-5-18"]
+    out += [s for s in sids if s not in out]
+    return ",".join(f"ACL:{s}:ALLOWED/0x0/FULL" for s in out)
+
+
+def set_share_acl(share: str, domain_sid: str, sids: list[str]) -> None:
+    res = run(["sharesec", share, f"--replace={share_acl_entries(domain_sid, sids)}"], timeout=30)
+    if res.returncode != 0:
+        raise SambaError(f"Freigabe-Berechtigungen für {share} nicht gesetzt (sharesec): {_detail(res)}")
 
 
 def reload_config() -> None:

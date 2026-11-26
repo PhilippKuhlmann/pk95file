@@ -66,6 +66,11 @@ class Jobs:
         threading.Thread(target=run, name=f"job-{kind}", daemon=True).start()
         return job
 
+    def busy(self, kind: str, share: str) -> bool:
+        with self._lock:
+            return any(j.kind == kind and j.share.lower() == share.lower() and j.state in ("queued", "running")
+                       for j in self._jobs)
+
     def get(self, job_id: str) -> dict:
         with self._lock:
             for j in self._jobs:

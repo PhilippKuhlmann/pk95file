@@ -334,8 +334,14 @@ enforced at all; the scan reports usage per file owner (Unix UID → AD name) pe
 ### Permissions model
 
 The Core UI shows three levels per AD group (or user): **Lesen**, **Ändern**, **Vollzugriff**. They become the
-NTFS-style ACL of the share root, inherited by everything below. Share-level permissions (`share_info.tdb`) stay at
-"Everyone: Full", the Windows best practice, so there is one place to look.
+NTFS-style ACL of the share root, inherited by everything below. Share-level permissions (`share_info.tdb`, written
+with `sharesec`) give Domain Admins, SYSTEM and every principal of the share FULL, and nobody else: `access based
+share enum` filters the share list by this descriptor, not by the folder ACL, so users without any permission do
+not see the share. Read/change/full is still decided by the folder ACL alone.
+
+Folders the app creates itself (share roots, `.recycle`) get mode 0777: with `acl_xattr:ignore system acls` smbd
+checks only the NT ACL, and the kernel would otherwise refuse what the ACL allows (a root-owned 0755 share root lets
+nobody but root create files).
 
 | Level | ACE on the share root (container + object inherit) |
 |---|---|

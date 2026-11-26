@@ -20,6 +20,7 @@ STATES = ("unconfigured", "joining", "ready", "failed")
 LOG_KEEP = 200
 SUGGEST_TTL = 60.0
 MAX_ODJ = 64 * 1024
+TRUST_WAIT = 90.0
 DEFAULT_HOSTNAME = "files"
 
 
@@ -241,8 +242,9 @@ class Setup:
                 app.ensure_ip(strict=True)
             app.stop_samba()
             app.write_config()
-            if not rejoin:
-                self._clear_secrets()
+            # Setup and rejoin start from a fresh secrets.tdb and empty winbind caches: requestodj into an existing
+            # machine secret (or a winbindd still caching the old one) leaves the trust broken.
+            self._clear_secrets()
             self._log("Tritt der Domäne bei …")
             if v.get("odj"):
                 samba.requestodj(v["odj"])
@@ -252,11 +254,12 @@ class Setup:
             self._log("Starte winbindd und prüfe die Vertrauensstellung …")
             app.start_process("winbindd")
             ok, msg = False, ""
-            for _ in range(30):
+            end = time.monotonic() + TRUST_WAIT
+            while time.monotonic() < end:
                 ok, msg = samba.trust_ok()
                 if ok:
                     break
-                time.sleep(2)
+                time.sleep(3)
             if not ok:
                 raise RuntimeError(f"Die Vertrauensstellung zur Domäne funktioniert nicht: {msg}")
             ok, msg = samba.netlogon_ok()

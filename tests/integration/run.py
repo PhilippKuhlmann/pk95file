@@ -118,6 +118,34 @@ def cacls(user: str, path: str, *args: str) -> str:
     return res.stdout + res.stderr
 
 
+def diag(label: str) -> None:
+    """Diagnostics for a failed file check: where files are, the share section, the ACL and the share SD."""
+    print(f"----- diagnostics: {label} -----", flush=True)
+    for cmd in (["sh", "-c", f"ls -la {SHARE_DIR} {SHARE_DIR}/.recycle 2>&1; find /srv/files -maxdepth 4 | head -40"],
+                ["sh", "-c", f"sed -n '/^\\[{SHARE}\\]/,/^\\[/p' /etc/samba/smb.conf"],
+                ["sh", "-c", f"for f in {SHARE_DIR} {SHARE_DIR}/*; do echo \"$f:\"; "
+                             "python3 -m pk95file.acl_helper /etc/samba/smb.conf get \"$f\" "
+                             f"$(wbinfo -D {WG} | sed -n 's/^SID *: //p') {SHARE} 2>&1 | tail -n 1; done"],
+                ["sharesec", SHARE, "--view"]):
+        res = dexec("ci-file", *cmd)
+        print((res.stdout + res.stderr).rstrip(), flush=True)
+    print("-----", flush=True)
+
+
+def logs(label: str) -> None:
+    print(f"----- logs: {label} -----", flush=True)
+    res = sh("docker", "logs", "--tail", "120", "ci-file")
+    print((res.stdout + res.stderr).rstrip(), flush=True)
+    res = dexec("ci-file", "sh", "-c", "tail -n 60 /var/log/samba/log.winbindd /var/log/samba/log.smbd 2>&1")
+    print(res.stdout.rstrip(), flush=True)
+    print("-----", flush=True)
+
+
+def ok_out(out: str, *want: str) -> bool:
+    """smbclient succeeded: no NT_STATUS error, and every wanted name is in the output."""
+    return "NT_STATUS" not in out and all(w in out for w in want)
+
+
 def dc_a_records() -> str:
     res = dexec("ci-dc", "samba-tool", "dns", "query", "127.0.0.1", REALM, "dc1", "A", "-U", f"Administrator%{ADMIN_PW}")
     return " ".join(sorted(re.findall(r"A: (\S+)", res.stdout))) or res.stdout + res.stderr
@@ -203,6 +231,7 @@ def main() -> int:
     check(st == 202, "POST /api/setup → 202")
     state = wait(lambda: (lambda s: isinstance(s, dict) and s.get("state") in ("ready", "failed") and s)(fs("GET", "/api/setup")[1]), 240, 3)
     if not check(state and state["state"] == "ready", "setup ready", json.dumps(state)[-1500:] if state else ""):
+        logs("setup")
         return 1
     check(state["server"]["fqdn"] == f"files.{REALM}", "setup: server block")
     check(wait(lambda: any(e["type"] == "file.setup.done" for e in EVENTS), 30), "event file.setup.done")
@@ -249,35 +278,40 @@ def main() -> int:
     dexec("ci-client", "sh", "-c", "cat > /etc/samba/smb.conf", stdin=f"[global]\n workgroup = {WG}\n realm = {REALM_UP}\n")
 
     out = smb("alice", "put /etc/hostname a.txt; mkdir Ordner; put /etc/hostname Ordner/b.txt; ls")
-    check("a.txt" in out and "Ordner" in out, "alice (change) writes", out[-300:])
+    if not check(ok_out(out, "a.txt", "Ordner"), "alice (change) writes", out[-400:]):
+        diag("alice write")
     check(dexec("ci-file", "getfattr", "-n", "user.NTACL", f"{SHARE_DIR}/Ordner/b.txt").returncode == 0,
           "inherited ACL in user.NTACL on a new file")
     owner = dexec("ci-file", "stat", "-c", "%u", f"{SHARE_DIR}/a.txt").stdout.strip()
     check(owner == str(alice_uid), f"file owner = alice's rid uid {alice_uid}", owner)
     dexec("ci-client", "sh", "-c", f"echo '{USER_PW}' | kinit alice@{REALM_UP}")
     out = smb("alice", "put /etc/hostname k.txt; ls", target=f"//files.{REALM}/{SHARE}", kerberos=True)
-    check("k.txt" in out, "alice with Kerberos (cifs/files.<realm>)", out[-300:])
+    check(ok_out(out, "k.txt"), "alice with Kerberos (cifs/files.<realm>)", out[-300:])
     out = smb("carol", "get a.txt /tmp/a; put /etc/hostname c.txt")
-    check("getting file" in out and "NT_STATUS_ACCESS_DENIED" in out, "carol (read) reads, cannot write", out[-300:])
+    if not check("getting file" in out and "NT_STATUS_ACCESS_DENIED opening remote file \\c.txt" in out
+                 and out.count("NT_STATUS") == 1, "carol (read) reads, cannot write", out[-300:]):
+        diag("carol read")
     out = smb("bob", "ls")
     check("NT_STATUS_ACCESS_DENIED" in out, "bob (no permission) is denied", out[-200:])
     out_bob = smb("bob", "", target=f"//{FILES_IP}/IPC$").strip()
     lst_bob = dexec("ci-client", "smbclient", "-L", f"//{FILES_IP}", "-U", f"{WG}\\bob%{USER_PW}").stdout
     lst_alice = dexec("ci-client", "smbclient", "-L", f"//{FILES_IP}", "-U", f"{WG}\\alice%{USER_PW}").stdout
-    check(SHARE not in lst_bob and SHARE in lst_alice, "ABE: bob does not see the share, alice does",
-          (lst_bob + out_bob)[-300:])
+    if not check(SHARE not in lst_bob and SHARE in lst_alice, "ABE: bob does not see the share, alice does",
+                 (lst_bob + out_bob)[-300:]):
+        diag("share list")
     check("NT_STATUS_ACCESS_DENIED" in cacls("alice", "/", "--add", f"ACL:{WG}\\bob:ALLOWED/OI|CI/READ"),
           "alice (change) cannot change ACLs")
     out = cacls("dave", "/Ordner", "--add", f"ACL:{WG}\\bob:ALLOWED/0x0/READ")
     check("NT_STATUS" not in out, "dave (full) changes ACLs", out[-200:])
-    smb("dave", "mkdir Geheim")
+    check(ok_out(smb("dave", "mkdir Geheim")), "dave (full) creates a folder")
     cacls("dave", "/Geheim", "--inherit", "remove")
     out = cacls("dave", "/Geheim", "--add", f"ACL:{WG}\\Leitung:ALLOWED/OI|CI/FULL")
     check("NT_STATUS" not in out, "dave restricts a folder to Leitung", out[-200:])
     check("Geheim" not in smb("alice", "ls") and "Geheim" in smb("dave", "ls"), "ABE: alice does not see Geheim")
-    smb("alice", "rm a.txt")
+    check(ok_out(smb("alice", "rm a.txt")), "alice deletes a.txt")
     rec = dexec("ci-file", "sh", "-c", f"ls {SHARE_DIR}/.recycle/*/a.txt").stdout
-    check("a.txt" in rec, "recycle bin: deleted file in .recycle/<user>", rec)
+    if not check("a.txt" in rec, "recycle bin: deleted file in .recycle/<user>", rec):
+        diag("recycle")
     check(".recycle" not in smb("carol", "ls"), "recycle bin hidden from carol")
     check(dexec("ci-file", "getfattr", "-n", "user.NTACL", f"{SHARE_DIR}/.recycle").returncode == 0, ".recycle ACL set")
 
@@ -313,7 +347,9 @@ def main() -> int:
     st, odj2 = ad("POST", "/api/computers/odj", {"name": "files", "dns_hostname": f"files.{REALM}", "reset": True})
     st, _ = fs("POST", "/api/join", {"odj": odj2["odj"]})
     state = wait(lambda: (lambda s: isinstance(s, dict) and s.get("state") in ("ready", "failed") and s)(fs("GET", "/api/setup")[1]), 180, 3)
-    check(st == 202 and state and state["state"] == "ready", "rejoin with a new blob", json.dumps(state)[-500:] if state else "")
+    if not check(st == 202 and state and state["state"] == "ready", "rejoin with a new blob",
+                 json.dumps(state)[-800:] if state else ""):
+        logs("rejoin")
     check(dexec("ci-file", "wbinfo", "-t").returncode == 0, "trust after rejoin")
     dexec("ci-client", "sh", "-c", f"kdestroy; echo '{USER_PW}' | kinit alice@{REALM_UP}")
     check("NT_STATUS" not in smb("alice", "ls", target=f"//files.{REALM}/{SHARE}", kerberos=True),

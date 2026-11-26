@@ -65,6 +65,12 @@ class AclTest(unittest.TestCase):
                    {"sid": DSID + "-1106", "type": 1, "flags": 3, "mask": 0x1200A9, "inherited": False}]
         self.assertEqual(acl.parse_permissions(entries, DSID), [{"sid": DSID + "-1104", "access": "change"}])
 
+    def test_share_acl_entries(self):
+        from pk95file import samba
+        self.assertEqual(samba.share_acl_entries(DSID, [DSID + "-1104", "S-1-5-18"]),
+                         f"ACL:{DSID}-512:ALLOWED/0x0/FULL,ACL:S-1-5-18:ALLOWED/0x0/FULL,"
+                         f"ACL:{DSID}-1104:ALLOWED/0x0/FULL")
+
     def test_child_flags(self):
         OI, CI, NP, IO, ID = acl_helper.OI, acl_helper.CI, acl_helper.NP, acl_helper.IO, acl_helper.ID
         self.assertEqual(acl_helper.child_flags(OI | CI, True), OI | CI | ID)
