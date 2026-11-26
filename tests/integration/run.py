@@ -304,8 +304,8 @@ def main() -> int:
     out = cacls("dave", "/Ordner", "--add", f"ACL:{WG}\\bob:ALLOWED/0x0/READ")
     check("NT_STATUS" not in out, "dave (full) changes ACLs", out[-200:])
     check(ok_out(smb("dave", "mkdir Geheim")), "dave (full) creates a folder")
-    cacls("dave", "/Geheim", "--inherit", "remove")
     out = cacls("dave", "/Geheim", "--add", f"ACL:{WG}\\Leitung:ALLOWED/OI|CI/FULL")
+    out += cacls("dave", "/Geheim", "--inherit", "remove")  # after the explicit ACE, or dave locks himself out
     check("NT_STATUS" not in out, "dave restricts a folder to Leitung", out[-200:])
     check("Geheim" not in smb("alice", "ls") and "Geheim" in smb("dave", "ls"), "ABE: alice does not see Geheim")
     check(ok_out(smb("alice", "rm a.txt")), "alice deletes a.txt")
@@ -356,7 +356,8 @@ def main() -> int:
           "Kerberos access after rejoin")
     check(fs("POST", "/core/backup/prepare")[0] == 204, "POST /core/backup/prepare → 204")
     st, status = fs("GET", "/api/status")
-    check(status["smbd"]["state"] == "backup" and fs("GET", "/core/health")[0] == 200, "Samba stopped for the backup")
+    check(st == 200 and status["smbd"]["state"] == "backup" and fs("GET", "/core/health")[0] == 200,
+          "Samba stopped for the backup, API still up", json.dumps(status)[:300])
     check({e["type"] for e in EVENTS} <= set(fs("GET", "/core/manifest")[1]["events"]), "events are in the manifest list")
     return 0
 

@@ -59,8 +59,10 @@ class Process:
     def _spawn(self) -> None:
         argv = self.argv_fn()
         try:
+            # Own session: smbd sends SIGTERM to its process group when it stops, which without this would be the
+            # app's own group (winbindd and the API process died on every smbd stop, e.g. rejoin or backup).
             p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                 text=True, errors="replace")
+                                 text=True, errors="replace", start_new_session=True)
         except OSError as exc:
             self.last_exit = f"{self.label} konnte nicht gestartet werden: {exc}"
             log.error("%s: %s", self.name, self.last_exit)
