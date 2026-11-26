@@ -147,9 +147,10 @@ class Usage:
                            "recycle_bytes": v.get("recycle_bytes", 0), "snapshot_bytes": v.get("snapshot_bytes", 0),
                            "soft_quota_bytes": size, "percent": v.get("bytes", 0) * 100 // size if size else 0})
         interval = self.app.app_settings()["scan_interval_minutes"] * 60000
-        return {"filesystem": {"path": self.app.cfg.data_root, "fs_type": "", "total_bytes": u["total_bytes"],
-                               "free_bytes": u["free_bytes"],
-                               "on_system_disk": False},
+        root = self.app.cfg.data_root
+        return {"filesystem": {"path": root, "fs_type": storage.fs_type(os.path.realpath(root)),
+                               "total_bytes": u["total_bytes"], "free_bytes": u["free_bytes"],
+                               "on_system_disk": storage.same_device(root, self.app.cfg.data_dir)},
                 "shares": shares, "scanned_at": d.get("scanned_at", 0),
                 "next_scan_at": d.get("scanned_at", 0) + interval if d.get("scanned_at") else 0}
 

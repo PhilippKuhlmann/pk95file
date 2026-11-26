@@ -281,6 +281,10 @@ class App:
             if any(p.get("unresolved") for p in pub["permissions"]):
                 warnings.append({"level": "warning", "code": "permissions",
                                  "message": f"Freigabe „{s['name']}“ enthält eine Gruppe, die es nicht mehr gibt."})
+        snap = self.snapshots.dashboard()
+        if not snap["last_ok"] and snap["failed_shares"]:
+            warnings.append({"level": "warning", "code": "snapshot",
+                             "message": "Vorgängerversionen fehlgeschlagen für: " + ", ".join(snap["failed_shares"]) + "."})
         rid_msg = rid_warning(mon.idmap["next_rid"])
         if rid_msg:
             warnings.append({"level": "warning", "code": "idmap", "message": rid_msg})
@@ -291,7 +295,7 @@ class App:
                         "recycle_bytes": rec_bytes, "scanned_at": scan.get("scanned_at", 0)},
             "sessions": sessions,
             "open_files": open_files,
-            "snapshots": self.snapshots.dashboard(),
+            "snapshots": snap,
             "warnings": warnings,
         }
 
