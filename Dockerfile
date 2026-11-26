@@ -25,7 +25,7 @@ RUN mkdir -p /opt/pk95file/bin \
 	&& printf '#!/bin/sh\nexec python3 -m pk95file.dfree "$@"\n' > /opt/pk95file/bin/dfree \
 	&& chmod 755 /opt/pk95file/bin/dfree
 
-ARG VERSION=1.0.1
+ARG VERSION=1.1.0
 ENV PYTHONPATH=/opt/pk95file \
 	PYTHONUNBUFFERED=1 \
 	PYTHONDONTWRITEBYTECODE=1 \

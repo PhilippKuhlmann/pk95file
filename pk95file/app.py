@@ -25,7 +25,10 @@ log = logging.getLogger("pk95file.app")
 
 BACKUP_RESUME = 600.0
 APP_DEFAULTS = {"scan_interval_minutes": 60, "disk_warn_percent": 20, "disk_critical_percent": 10,
-                "snapshot_min_free_percent": 15, "smb_encryption": "if_required", "min_protocol": "SMB2_10"}
+                "snapshot_min_free_percent": 15, "smb_encryption": "if_required", "min_protocol": "SMB2_10",
+                "macos": False}
+MACOS_NOTICE = ("Die macOS-Unterstützung gilt für neue Verbindungen. Bereits verbundene Macs behalten das bisherige "
+                "Verhalten, bis sie die Freigabe trennen und neu verbinden.")
 
 
 def manifest() -> dict:
@@ -101,11 +104,17 @@ class App:
                     f.add(key, "Erlaubt: " + ", ".join(allowed) + ".")
                 else:
                     new[key] = body[key]
+        if "macos" in body:
+            if not isinstance(body["macos"], bool):
+                f.add("macos", "Bitte true oder false angeben.")
+            else:
+                new["macos"] = body["macos"]
         f.raise_if_any()
+        changed_mac = new["macos"] != self.app_settings()["macos"]
         self.update_settings(new)
         if self.state() == "ready":
             self.write_config(reload=True)
-        return self.app_settings()
+        return {**self.app_settings(), "notice": MACOS_NOTICE if changed_mac else ""}
 
     # -- state -------------------------------------------------------------------------------------------------
     def state(self) -> str:
