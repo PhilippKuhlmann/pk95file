@@ -12,6 +12,8 @@ from .acl import Acls
 from .errors import NOT_READY, ApiError, Fields
 from .jobs import Jobs
 from .monitor import Monitor, rid_warning
+from .recycle import Recycle
+from .scheduler import Scheduler
 from .setup import Setup
 from .shares import Shares
 from .store import load_json, now_ms, save_json, write_text
@@ -52,6 +54,9 @@ class App:
         self.setup = Setup(self)
         self.shares = Shares(self, resolver)
         self.monitor = Monitor(self)
+        self.recycle = Recycle(self)
+        self.scheduler = Scheduler(self)
+        self.scheduler.add("recycle", self.recycle.task)
         self.backup_active = False
         self._backup_timer: threading.Timer | None = None
         self._lock = threading.RLock()
@@ -175,9 +180,11 @@ class App:
 
     def on_ready(self) -> None:
         self.monitor.start()
+        self.scheduler.start()
 
     def shutdown(self) -> None:
         self.monitor.stop()
+        self.scheduler.stop()
         self.stop_samba()
         if self.cfg.manage_processes and self.settings.get("ip_mode") == "managed" and self.settings.get("ip"):
             netinfo.remove(self.settings["ip"], self.settings["prefix"], self.settings["iface"])

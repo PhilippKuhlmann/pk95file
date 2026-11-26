@@ -243,5 +243,51 @@ class SharesValidationTest(unittest.TestCase):
         self.assertEqual(pub["status"], "ok")
 
 
+class RecycleSchedulerTest(unittest.TestCase):
+    def test_safe_rel(self):
+        from pk95file.recycle import safe_rel
+        self.assertEqual(safe_rel("alice/Ordner/a.txt"), "alice/Ordner/a.txt")
+        self.assertEqual(safe_rel("alice\\b.txt"), "alice/b.txt")
+        for bad in ("", "/etc/passwd", "alice/../../x", "..", None, "a\x00b"):
+            self.assertIsNone(safe_rel(bad), bad)
+
+    def test_purge_and_free_name(self):
+        from pk95file import recycle
+        with tempfile.TemporaryDirectory() as share:
+            base = os.path.join(share, ".recycle", "alice", "Ordner")
+            os.makedirs(base)
+            old, new = os.path.join(base, "old.txt"), os.path.join(base, "new.txt")
+            for path in (old, new):
+                open(path, "w").close()
+            now = 1_800_000_000
+            os.utime(old, (now - 40 * 86400, now - 40 * 86400))
+            os.utime(new, (now - 86400, now - 86400))
+            listing = recycle.listing(share)
+            self.assertEqual(listing["total"], 2)
+            self.assertEqual({e["user"] for e in listing["items"]}, {"alice"})
+            self.assertEqual(recycle.purge(share, 30, now=now), 1)
+            self.assertFalse(os.path.exists(old))
+            self.assertTrue(os.path.exists(new))
+            self.assertEqual(recycle.purge(share, 0, now=now), 1)
+            self.assertFalse(os.path.exists(os.path.join(share, ".recycle", "alice")))
+            target = os.path.join(share, "a.txt")
+            open(target, "w").close()
+            self.assertEqual(recycle.free_name(target), os.path.join(share, "a (Wiederhergestellt).txt"))
+            open(os.path.join(share, "a (Wiederhergestellt).txt"), "w").close()
+            self.assertEqual(recycle.free_name(target), os.path.join(share, "a (Wiederhergestellt 2).txt"))
+
+    def test_due_and_next_slot(self):
+        from datetime import datetime
+        from pk95file.scheduler import due_slot, next_slot
+        wed = datetime(2026, 11, 25, 12, 10)  # a Wednesday
+        times, days = ["07:00", "12:00", "17:00"], [1, 2, 3, 4, 5]
+        self.assertEqual(due_slot(times, days, wed, set()), "2026-11-25 12:00")
+        self.assertIsNone(due_slot(times, days, wed, {"2026-11-25 12:00"}))
+        self.assertIsNone(due_slot(times, days, datetime(2026, 11, 25, 14, 0), set()))   # missed by > 1 h
+        self.assertIsNone(due_slot(times, days, datetime(2026, 11, 28, 12, 5), set()))   # Saturday
+        self.assertEqual(next_slot(times, days, wed), datetime(2026, 11, 25, 17, 0))
+        self.assertEqual(next_slot(times, days, datetime(2026, 11, 27, 18, 0)), datetime(2026, 11, 30, 7, 0))
+
+
 if __name__ == "__main__":
     unittest.main()

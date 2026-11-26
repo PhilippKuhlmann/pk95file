@@ -72,6 +72,13 @@ def build(app: App) -> Router:
         return job_response(app.shares.delete(req.params["name"], req.flag("delete_data")))
     r.add("DELETE", f"/api/shares/{NAME}", ready(delete_share))
 
+    # Recycle bin
+    r.add("GET", f"/api/shares/{NAME}/recycle", lambda req: app.recycle.list(req.params["name"], req))
+    r.add("POST", f"/api/shares/{NAME}/recycle/restore",
+          lambda req: job_response(app.recycle.restore(req.params["name"], req.json())))
+    r.add("POST", f"/api/shares/{NAME}/recycle/empty",
+          lambda req: job_response(app.recycle.empty(req.params["name"], req.json())))
+
     r.add("GET", "/api/orphans", ready(lambda req: app.shares.orphans()))
     r.add("DELETE", f"/api/orphans/{NAME}", ready(lambda req: job_response(app.shares.delete_orphan(req.params["name"]))))
 
