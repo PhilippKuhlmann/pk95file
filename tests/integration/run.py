@@ -342,12 +342,15 @@ def main() -> int:
     check(st == 200 and body["items"] == [] and body["backend"] == "rsync", "no snapshots yet")
     dexec("ci-client", "sh", "-c", "echo eins > /tmp/v1; echo zwei > /tmp/v2")
     check(ok_out(smb("alice", "put /tmp/v1 v1.txt")), "alice writes v1.txt (eins)")
+    dexec("ci-file", "sh", "-c", f"head -c 5242880 /dev/urandom > '{SHARE_DIR}/blob.bin'")  # 5 MiB, unchanged later
     job = job_done(fs("POST", f"/api/shares/{SHARE}/snapshots"))
     check(job and job["state"] == "done", "manual snapshot job done", json.dumps(job))
     st, body = fs("GET", f"/api/shares/{SHARE}/snapshots")
     snap1 = body["items"][0]["id"] if st == 200 and body["items"] else ""
     check(snap1.startswith("@GMT-") and body["items"][0]["files"] > 0 and body["items"][0]["manual"],
           "snapshot listed", json.dumps(body)[:300])
+    check(body["items"] and body["items"][0]["unique_bytes"] >= 5 * 1024 * 1024,
+          "first snapshot is a full copy: unique_bytes counts the 5 MiB file", json.dumps(body["items"][:1]))
     check("shadow_copy2" in dexec("ci-file", "cat", "/etc/samba/smb.conf").stdout, "smb.conf: shadow_copy2 on the share")
     check(ok_out(smb("alice", "put /tmp/v2 v1.txt")), "alice overwrites v1.txt (zwei)")
     out = smb("alice", "allinfo v1.txt")
@@ -365,6 +368,9 @@ def main() -> int:
     links = dexec("ci-file", "stat", "-c", "%h", f"/srv/files/.pk95/snapshots/{SHARE}/{ids[0]}/k.txt").stdout.strip()
     check(job and job["state"] == "done" and len(ids) == 2 and links == "2",
           "second snapshot hardlinks the unchanged file to the first", f"ids={ids} links={links}")
+    second = fs("GET", f"/api/shares/{SHARE}/snapshots")[1]["items"][0]
+    check(second["unique_bytes"] < 1024 * 1024, "second snapshot: unchanged files cost nothing",
+          json.dumps(second))
     st, _ = fs("PUT", f"/api/shares/{SHARE}", {"snapshots": {"keep": {"recent": 1, "daily": 0, "weekly": 0}}})
     time.sleep(1.5)
     job_done(fs("POST", f"/api/shares/{SHARE}/snapshots"))
