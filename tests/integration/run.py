@@ -389,10 +389,11 @@ def main() -> int:
     gib = 1024 ** 3
     st, _ = fs("PUT", f"/api/shares/{SHARE}", {"soft_quota": {"size_bytes": gib, "warn_percent": 50,
                                                                "lock_when_exceeded": True}})
-    out = smb("alice", "du")
-    m = re.search(r"(\d+) blocks of size (\d+)\. (\d+) blocks available", out)
-    size = int(m.group(1)) * int(m.group(2)) if m else 0
-    check(st == 200 and abs(size - gib) < 2 * 1024 * 1024, "dfree: Explorer sees the soft quota as disk size", out[-200:])
+    conf = dexec("ci-file", "cat", "/etc/samba/smb.conf").stdout
+    out = dexec("ci-file", "sh", "-c", f"cd '{SHARE_DIR}' && /opt/pk95file/bin/dfree .").stdout.split()
+    size = int(out[0]) * int(out[2]) if len(out) == 3 else 0
+    check(st == 200 and "dfree command = /opt/pk95file/bin/dfree" in conf and size == gib,
+          "dfree: the share reports the soft quota as disk size", " ".join(out))
     dexec("ci-file", "truncate", "-s", "1200M", f"{SHARE_DIR}/big.bin")
     job_done(fs("POST", "/api/usage/scan"))
     st, sh_ = fs("GET", f"/api/shares/{SHARE}")
