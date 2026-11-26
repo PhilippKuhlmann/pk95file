@@ -20,6 +20,10 @@ RUN apt-get update \
 	&& grep -q '^passwd:.*winbind' /etc/nsswitch.conf
 
 COPY pk95file /opt/pk95file/pk95file
+# smb.conf "dfree command": the soft quota as disk size (docs/design.md §8)
+RUN mkdir -p /opt/pk95file/bin \
+	&& printf '#!/bin/sh\nexec python3 -m pk95file.dfree "$@"\n' > /opt/pk95file/bin/dfree \
+	&& chmod 755 /opt/pk95file/bin/dfree
 
 ARG VERSION=1.0.0
 ENV PYTHONPATH=/opt/pk95file \

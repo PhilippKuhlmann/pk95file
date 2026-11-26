@@ -79,6 +79,11 @@ def build(app: App) -> Router:
     r.add("DELETE", "/api/shares/{name:[^/]+}/snapshots/{snap:@GMT-[0-9.-]+}",
           lambda req: job_response(app.snapshots.delete(req.params["name"], req.params["snap"])))
 
+    # Usage and soft quota
+    r.add("GET", "/api/usage", lambda req: app.usage.info())
+    r.add("POST", "/api/usage/scan", ready(lambda req: job_response(app.usage.start_scan())))
+    r.add("GET", f"/api/shares/{NAME}/usage/owners", lambda req: app.usage.owners(req.params["name"]))
+
     # Recycle bin
     r.add("GET", f"/api/shares/{NAME}/recycle", lambda req: app.recycle.list(req.params["name"], req))
     r.add("POST", f"/api/shares/{NAME}/recycle/restore",

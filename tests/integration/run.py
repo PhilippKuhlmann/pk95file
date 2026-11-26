@@ -377,6 +377,38 @@ def main() -> int:
     check(job and job["state"] == "done" and fs("GET", f"/api/shares/{SHARE}/snapshots")[1]["items"] == [],
           "DELETE snapshot")
 
+    # --- usage and soft quota -------------------------------------------------------------------------------------
+    job = job_done(fs("POST", "/api/usage/scan"))
+    st, use = fs("GET", "/api/usage")
+    row = next((x for x in (use or {}).get("shares", []) if x["name"] == SHARE), {})
+    check(job and job["state"] == "done" and row.get("bytes", 0) > 0 and row.get("files", 0) > 0 and use["scanned_at"] > 0,
+          "usage scan", json.dumps(use)[:300])
+    st, own = fs("GET", f"/api/shares/{SHARE}/usage/owners")
+    check(st == 200 and any("alice" in o["name"].lower() for o in own["items"]), "usage per owner names alice",
+          json.dumps(own)[:300])
+    gib = 1024 ** 3
+    st, _ = fs("PUT", f"/api/shares/{SHARE}", {"soft_quota": {"size_bytes": gib, "warn_percent": 50,
+                                                               "lock_when_exceeded": True}})
+    conf = dexec("ci-file", "cat", "/etc/samba/smb.conf").stdout
+    out = dexec("ci-file", "sh", "-c", f"cd '{SHARE_DIR}' && /opt/pk95file/bin/dfree .").stdout.split()
+    size = int(out[0]) * int(out[2]) if len(out) == 3 else 0
+    check(st == 200 and "dfree command = /opt/pk95file/bin/dfree" in conf and size == gib,
+          "dfree: the share reports the soft quota as disk size", " ".join(out))
+    dexec("ci-file", "truncate", "-s", "1200M", f"{SHARE_DIR}/big.bin")
+    job_done(fs("POST", "/api/usage/scan"))
+    st, sh_ = fs("GET", f"/api/shares/{SHARE}")
+    check(sh_["status"] == "locked" and sh_["usage"]["bytes"] > gib, "over the soft quota → share locked",
+          json.dumps({"status": sh_["status"], "usage": sh_["usage"]}))
+    check(wait(lambda: any(e["type"] == "file.soft_quota.exceeded" and e["data"].get("locked") for e in EVENTS), 15),
+          "event file.soft_quota.exceeded (locked)")
+    out = smb("alice", "put /etc/hostname locked.txt")
+    check("NT_STATUS" in out, "locked share refuses writes", out[-200:])
+    dexec("ci-file", "rm", "-f", f"{SHARE_DIR}/big.bin")
+    job_done(fs("POST", "/api/usage/scan"))
+    check(fs("GET", f"/api/shares/{SHARE}")[1]["status"] != "locked" and ok_out(smb("alice", "put /etc/hostname ok.txt")),
+          "below the soft quota → unlocked, writes work")
+    fs("PUT", f"/api/shares/{SHARE}", {"soft_quota": {"size_bytes": 0, "lock_when_exceeded": False}})
+
     # --- changes --------------------------------------------------------------------------------------------------
     st, body = fs("PUT", f"/api/shares/{SHARE}/permissions",
                   {"permissions": [perms[0], {"sid": sids["Leitung"], "access": "full"}], "propagate": True})

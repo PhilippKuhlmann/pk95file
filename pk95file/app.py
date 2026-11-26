@@ -15,6 +15,7 @@ from .monitor import Monitor, rid_warning
 from .recycle import Recycle
 from .scheduler import Scheduler
 from .snapshots import Snapshots
+from .usage import Usage
 from .setup import Setup
 from .shares import Shares
 from .store import load_json, now_ms, save_json, write_text
@@ -60,6 +61,8 @@ class App:
         self.scheduler.add("recycle", self.recycle.task)
         self.snapshots = Snapshots(self)
         self.scheduler.add("snapshots", self.snapshots.task)
+        self.usage = Usage(self)
+        self.scheduler.add("usage", self.usage.task)
         self.backup_active = False
         self._backup_timer: threading.Timer | None = None
         self._lock = threading.RLock()
