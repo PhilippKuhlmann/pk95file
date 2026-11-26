@@ -355,5 +355,32 @@ class UsageTest(unittest.TestCase):
             self.assertEqual(sum(v[0] for v in owners.values()), 30)
 
 
+class SessionsTest(unittest.TestCase):
+    SAMPLE = {
+        "sessions": {"3121": {"session_id": "3121", "server_id": {"pid": "4711"}, "username": "EXAMPLE\\max",
+                              "remote_machine": "192.168.1.112", "hostname": "PC-01", "session_dialect": "SMB3_11",
+                              "encryption": {"cipher": "-"}, "signing": {"cipher": "AES-128-GMAC"},
+                              "creation_time": "2026-11-26T07:00:00+01:00"}},
+        "tcons": {"1": {"service": "Buchhaltung", "session_id": "3121"}, "2": {"service": "IPC$", "session_id": "3121"}},
+        "open_files": {"x": {"service_path": "/srv/files/shares/Buchhaltung", "filename": "2026/Rechnung.xlsx",
+                             "opens": {"4711/1": {"server_id": {"pid": "4711"}, "access_mask": {"WRITE_DATA": True},
+                                                  "oplock": {"text": "BATCH"},
+                                                  "opened_at": "2026-11-26T07:01:00+01:00"}}}},
+    }
+
+    def test_parse(self):
+        from pk95file.sessions import parse_open_files, parse_sessions
+        s = parse_sessions(self.SAMPLE)
+        self.assertEqual(len(s), 1)
+        self.assertEqual((s[0]["id"], s[0]["pid"], s[0]["shares"], s[0]["open_files"]), ("3121", 4711, ["Buchhaltung"], 1))
+        self.assertTrue(s[0]["signed"])
+        self.assertFalse(s[0]["encrypted"])
+        self.assertEqual(s[0]["connected_at"], 1795672800000)
+        f = parse_open_files(self.SAMPLE, {"Buchhaltung": "/srv/files/shares/Buchhaltung"})
+        self.assertEqual(f[0]["share"], "Buchhaltung")
+        self.assertEqual((f[0]["mode"], f[0]["oplock"], f[0]["session_id"]), ("write", "batch", "3121"))
+        self.assertEqual(parse_sessions({}), [])
+
+
 if __name__ == "__main__":
     unittest.main()
