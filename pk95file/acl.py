@@ -17,6 +17,8 @@ import json
 import subprocess
 import sys
 
+from .errors import ApiError
+
 ACCESS_MASK = {
     "read": 0x001200A9,    # Read & Execute
     "change": 0x001301BF,  # Modify
@@ -33,8 +35,9 @@ INHERIT = "OICI"
 HELPER_TIMEOUT = 120
 
 
-class AclError(Exception):
-    pass
+class AclError(ApiError):
+    def __init__(self, message: str):
+        super().__init__(500, message)
 
 
 def domain_admins(domain_sid: str) -> str:

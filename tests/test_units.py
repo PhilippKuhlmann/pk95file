@@ -68,8 +68,7 @@ class AclTest(unittest.TestCase):
     def test_share_acl_entries(self):
         from pk95file import samba
         self.assertEqual(samba.share_acl_entries(DSID, [DSID + "-1104", "S-1-5-18"]),
-                         f"ACL:{DSID}-512:ALLOWED/0x0/FULL,ACL:S-1-5-18:ALLOWED/0x0/FULL,"
-                         f"ACL:{DSID}-1104:ALLOWED/0x0/FULL")
+                         f"{DSID}-512:ALLOWED/0/FULL,S-1-5-18:ALLOWED/0/FULL,{DSID}-1104:ALLOWED/0/FULL")
 
     def test_child_flags(self):
         OI, CI, NP, IO, ID = acl_helper.OI, acl_helper.CI, acl_helper.NP, acl_helper.IO, acl_helper.ID

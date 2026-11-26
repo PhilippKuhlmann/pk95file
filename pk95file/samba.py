@@ -7,6 +7,7 @@ import logging
 import re
 import subprocess
 
+from .errors import ApiError
 from .supervisor import Process
 
 log = logging.getLogger("pk95file.samba")
@@ -16,8 +17,11 @@ SID_USER, SID_DOM_GROUP, SID_DOMAIN, SID_ALIAS, SID_WKN_GROUP = 1, 2, 3, 4, 5
 KIND = {SID_USER: "user", SID_DOM_GROUP: "group", SID_ALIAS: "group", SID_WKN_GROUP: "well_known"}
 
 
-class SambaError(Exception):
-    pass
+class SambaError(ApiError):
+    """A Samba tool failed: answered as 500 with the German message (not the generic internal error)."""
+
+    def __init__(self, message: str):
+        super().__init__(500, message)
 
 
 def run(argv: list[str], timeout: float = 30, stdin: str | None = None) -> subprocess.CompletedProcess:
@@ -124,10 +128,11 @@ def grant(privilege: str, principal: str) -> str | None:
 
 
 def share_acl_entries(domain_sid: str, sids: list[str]) -> str:
-    """sharesec ACL list: Domain Admins, SYSTEM and the given SIDs with FULL at share level (pure)."""
+    """sharesec ACL list ("SID:ALLOWED/0/FULL", comma separated – no "ACL:" prefix unlike smbcacls): Domain Admins,
+    SYSTEM and the given SIDs with FULL at share level (pure)."""
     out = [f"{domain_sid}-512", "S-1-5-18"]
     out += [s for s in sids if s not in out]
-    return ",".join(f"ACL:{s}:ALLOWED/0x0/FULL" for s in out)
+    return ",".join(f"{s}:ALLOWED/0/FULL" for s in out)
 
 
 def set_share_acl(share: str, domain_sid: str, sids: list[str]) -> None:
