@@ -360,8 +360,8 @@ that belong to no share. `DELETE /api/orphans/{name}` → `202` job.
 | `GET /api/shares/{name}/snapshots` | – | `200 {"items": [snapshot…], "backend": "rsync"}` |
 | `POST /api/shares/{name}/snapshots` | – | `202` job (kind `snapshot`); `409` while one runs for this share |
 | `DELETE /api/shares/{name}/snapshots/{id}` | – | `202` job (kind `snapshot_delete`) |
-| `GET /api/shares/{name}/snapshots/{id}/files?path=Ordner/Unterordner` | – | `200 {"items": [{"name", "type", "size", "modified_at"}]}` (optional, for restoring in Core) |
-| `POST /api/shares/{name}/snapshots/{id}/restore` | `{"path": "Ordner/Datei.xlsx", "mode": "copy"}` | `202` job (optional) |
+| `GET /api/shares/{name}/snapshots/{id}/files?path=Ordner/Unterordner` | – | **ab 1.1** – `200 {"items": [{"name", "type", "size", "modified_at"}]}` (for restoring in Core) |
+| `POST /api/shares/{name}/snapshots/{id}/restore` | `{"path": "Ordner/Datei.xlsx", "mode": "copy"}` | **ab 1.1** – `202` job |
 
 Snapshot object:
 
@@ -373,7 +373,8 @@ Snapshot object:
 - `restore.mode`: `copy` restores next to the original as `<Name> (Wiederhergestellt 25.11.2026 12-00)`;
   `overwrite` replaces the current file or folder (the replaced version goes to the recycle bin). `path` is relative to
   the share root, without `..`.
-- Users restore themselves in Explorer (Eigenschaften → Vorgängerversionen); the API restore is for admins.
+- Users restore themselves in Explorer (Eigenschaften → Vorgängerversionen); the API restore (ab 1.1) is for admins.
+  In 1.0 the two routes above answer `404`.
 - `backend: "zfs-host"` (later): list only; `POST` and `DELETE` answer `409` („Snapshots werden auf dem Proxmox-Host
   verwaltet.“).
 
@@ -458,7 +459,7 @@ Report only; per-user limits cannot be enforced (`docs/design.md` §8).
   "started_at": 1764090000000, "finished_at": 0, "error": "" }
 ```
 
-`kind`: `permissions`, `snapshot`, `snapshot_delete`, `restore`, `recycle_restore`, `recycle_empty`, `scan`,
+`kind`: `permissions`, `snapshot`, `snapshot_delete`, `restore` (ab 1.1), `recycle_restore`, `recycle_empty`, `scan`,
 `delete_share`, `delete_orphan`. `state`: `queued`, `running`, `done`, `failed`. Jobs on the same share run one after
 another; snapshots run one share at a time.
 
