@@ -17,6 +17,7 @@ class Config:
     krb5_conf: str = "/etc/krb5.conf"
     hosts_file: str = "/etc/hosts"
     default_ip: str = ""                     # PK95FILE_DEFAULT_IP: the operator's suggestion for the wizard
+    maintenance_time: str = "03:30"          # PK95FILE_MAINTENANCE_TIME: daily recycle retention (local time)
     core_mode: bool = False
     core_url: str = ""
     token: str = ""
@@ -49,6 +50,9 @@ def load(env=None) -> Config:
     cfg.data_dir = env.get("PK95FILE_DATA_DIR", cfg.data_dir)
     cfg.data_root = env.get("PK95FILE_DATA_ROOT", cfg.data_root)
     cfg.default_ip = env.get("PK95FILE_DEFAULT_IP", "").strip()
+    mt = env.get("PK95FILE_MAINTENANCE_TIME", "").strip()
+    if len(mt) == 5 and mt[2] == ":" and mt[:2].isdigit() and mt[3:].isdigit() and int(mt[:2]) < 24 and int(mt[3:]) < 60:
+        cfg.maintenance_time = mt
     cfg.core_mode = _flag(env.get("PK95_CORE_MODE"), False)
     cfg.core_url = env.get("PK95_CORE_URL", "").rstrip("/")
     cfg.token = env.get("PK95_CORE_TOKEN", "") if cfg.core_mode else env.get("PK95FILE_TOKEN", "")

@@ -3,6 +3,7 @@
   python3 -m pk95file.acl_helper <smb.conf> set <path> <sddl> <domain_sid> <service>
   python3 -m pk95file.acl_helper <smb.conf> get <path> <domain_sid> <service>
   python3 -m pk95file.acl_helper <smb.conf> propagate <root> <domain_sid> <service> <skip-json>
+  python3 -m pk95file.acl_helper <smb.conf> inherit <path> <domain_sid> <service>
 
 The share has to be in smb.conf: its section is loaded into Samba's s3 parameter context, so smbd's VFS
 (acl_xattr with user.NTACL) runs for that share. Samba imports stay inside the functions, so the pure
@@ -139,6 +140,17 @@ def main(argv: list[str]) -> int:
         print(json.dumps(describe(_get(lp, path, service), domain_sid)))
     elif cmd == "get" and len(args) == 3:
         path, domain_sid, service = args
+        print(json.dumps(describe(_get(lp, path, service), domain_sid)))
+    elif cmd == "inherit" and len(args) == 3:
+        # one item (e.g. a folder a restore created): its inherited ACEs from its parent, explicit ones kept
+        path, domain_sid, service = args
+        from samba.dcerpc import security
+        dsid = security.dom_sid(domain_sid)
+        parent = _get(lp, os.path.dirname(path.rstrip("/")), service)
+        sd = _get(lp, path, service)
+        new = rebuild(sd, parent, os.path.isdir(path), domain_sid)
+        if new.as_sddl(dsid) != sd.as_sddl(dsid):
+            _set(lp, path, new.as_sddl(dsid), domain_sid, service)
         print(json.dumps(describe(_get(lp, path, service), domain_sid)))
     elif cmd == "propagate" and len(args) == 4:
         root, domain_sid, service, skip = args

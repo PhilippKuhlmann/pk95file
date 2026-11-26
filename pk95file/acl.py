@@ -117,6 +117,10 @@ class Acls:
         """{"sddl", "owner", "group", "protected", "aces": [{"sid", "type", "flags", "mask", "inherited"}]}"""
         return self._run("get", path, domain_sid, service)
 
+    def inherit(self, path: str, domain_sid: str, service: str) -> dict:
+        """Give one file or folder the ACEs it inherits from its parent (explicit ones are kept)."""
+        return self._run("inherit", path, domain_sid, service)
+
     def propagate(self, root: str, domain_sid: str, service: str, skip: list[str]) -> dict:
         """Recompute inherited ACEs below root (explicit ones are kept). {"done": n, "errors": [...]}"""
         return self._run("propagate", root, domain_sid, service, json.dumps(skip))

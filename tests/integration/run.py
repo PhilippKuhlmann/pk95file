@@ -315,6 +315,28 @@ def main() -> int:
     check(".recycle" not in smb("carol", "ls"), "recycle bin hidden from carol")
     check(dexec("ci-file", "getfattr", "-n", "user.NTACL", f"{SHARE_DIR}/.recycle").returncode == 0, ".recycle ACL set")
 
+    def job_done(resp):
+        st, body = resp
+        if st != 202 or not isinstance(body, dict) or "job" not in body:
+            return None
+        return wait(lambda: (lambda j: isinstance(j, dict) and j.get("state") in ("done", "failed") and j)(
+            fs("GET", f"/api/jobs/{body['job']['id']}")[1]), 60)
+
+    st, rec = fs("GET", f"/api/shares/{SHARE}/recycle")
+    item = next((i for i in (rec or {}).get("items", []) if i["path"].endswith("/a.txt")), None)
+    check(st == 200 and item and item["size"] > 0 and item["deleted_at"] > 0 and rec["bytes"] >= item["size"],
+          "GET recycle lists alice's a.txt", json.dumps(rec)[:300])
+    if item:
+        job = job_done(fs("POST", f"/api/shares/{SHARE}/recycle/restore", {"paths": [item["path"]]}))
+        check(job and job["state"] == "done", "recycle restore job done", json.dumps(job))
+        check(ok_out(smb("alice", "get a.txt /tmp/a2"), "getting file"), "alice reads the restored file")
+    check(fs("POST", f"/api/shares/{SHARE}/recycle/restore", {"paths": ["../../etc/passwd"]})[0] == 422,
+          "recycle restore outside .recycle → 422")
+    smb("alice", "rm a.txt")
+    job = job_done(fs("POST", f"/api/shares/{SHARE}/recycle/empty", {"older_than_days": 0}))
+    check(job and job["state"] == "done" and fs("GET", f"/api/shares/{SHARE}/recycle")[1]["total"] == 0,
+          "recycle empty", json.dumps(job))
+
     # --- changes --------------------------------------------------------------------------------------------------
     st, body = fs("PUT", f"/api/shares/{SHARE}/permissions",
                   {"permissions": [perms[0], {"sid": sids["Leitung"], "access": "full"}], "propagate": True})

@@ -339,9 +339,15 @@ with `sharesec`) give Domain Admins, SYSTEM and every principal of the share FUL
 share enum` filters the share list by this descriptor, not by the folder ACL, so users without any permission do
 not see the share. Read/change/full is still decided by the folder ACL alone.
 
-Folders the app creates itself (share roots, `.recycle`) get mode 0777: with `acl_xattr:ignore system acls` smbd
-checks only the NT ACL, and the kernel would otherwise refuse what the ACL allows (a root-owned 0755 share root lets
-nobody but root create files).
+Folders the app creates itself (share roots, `.recycle`, folders a restore recreates) get mode 0777: with
+`acl_xattr:ignore system acls` smbd checks only the NT ACL, and the kernel would otherwise refuse what the ACL allows
+(a root-owned 0755 share root lets nobody but root create files).
+
+**Conscious decision (agreed 2026-11-26):** the NT ACL is the only access control on the share data. That is safe
+because only the PK95 File container mounts `/srv/pk95/files`, and every access from outside goes through smbd. The
+flip side, stated plainly: local processes inside the container or on the LXC (and the Proxmox host) bypass the NT
+ACLs completely – they see 0777 folders and plain Unix files. Nothing else may mount or work on the data root; backups
+(vzdump/PBS) read it as root anyway and keep `user.NTACL` as an xattr.
 
 | Level | ACE on the share root (container + object inherit) |
 |---|---|
